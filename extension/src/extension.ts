@@ -1,110 +1,679 @@
 import * as vscode from 'vscode';
 import fetch from 'node-fetch';
 
-const SERVER_URL = process.env.MCP_AUTOPILOT_URL || 'http://localhost:7088/jsonrpc';
-const AUTO_KEY = 'autonomousMcpHelper.autoLoop.enabled';
+const SERVER_URL = 'http://localhost:7088/jsonrpc';
+const STATE_KEY = 'autonomousCopilot.state';
 
-async function callMcp(method: string, params: any) {
-  const body = { jsonrpc: '2.0', id: Date.now(), method, params };
-  const resp = await fetch(SERVER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const data = await resp.json();
-  if (data.error) throw new Error(data.error.message || 'Error MCP');
-  return data.result;
+interface ProjectState {
+  isAnalyzing: boolean;
+  lastAnalysis: number;
+  sessionsCount: number;
+  suggestionsApplied: number;
+  errorsFixed: number;
+  currentSuggestions: Suggestion[];
 }
 
-function collectContext(): string {
-  const editor = vscode.window.activeTextEditor;
-  if (!editor) return '';
-  const maxLines = vscode.workspace.getConfiguration('autonomousMcpHelper').get<number>('contextMaxLines', 400);
-  const lines = Math.min(maxLines, editor.document.lineCount);
-  return editor.document.getText(new vscode.Range(0, 0, lines, 0)).slice(0, 8000);
+interface Suggestion {
+  id: string;
+  type: 'fix' | 'improvement' | 'feature' | 'test';
+  title: string;
+  description: string;
+  code?: string;
+  filePath?: string;
+  priority: number;
+  timestamp: number;
+  applied?: boolean;
 }
 
-async function runAutopilot(showDoc = true) {
-  const contextSnippet = collectContext();
-  const question = 'Genera el siguiente paso de desarrollo y acciones concretas basadas en el código abierto.';
-  const result = await callMcp('mcp.autoresponder.reply', { question, context: contextSnippet, temperature: 0.2 });
-  const answer = result.answer || JSON.stringify(result);
-  if (showDoc) {
-    const doc = await vscode.workspace.openTextDocument({ content: answer, language: 'markdown' });
-    await vscode.window.showTextDocument(doc, { preview: false });
+class AutonomousEngine {
+  private static instance: AutonomousEngine;
+  private isEnabled = false;
+  private analysisTimer?: NodeJS.Timeout;
+  private fileWatcher?: vscode.Disposable;
+  private diagnosticWatcher?: vscode.Disposable;
+  private state: ProjectState;
+
+  constructor(private context: vscode.ExtensionContext) {
+    console.log('🤖 AutonomousEngine constructor called');
+    this.state = this.loadState();
+    AutonomousEngine.instance = this;
+    console.log('📊 AutonomousEngine state loaded:', this.state);
   }
-  return answer;
-}
 
-let autoInterval: NodeJS.Timeout | undefined;
+  static getInstance() { return AutonomousEngine.instance; }
 
-function startAutoLoop(context: vscode.ExtensionContext) {
-  stopAutoLoop();
-  const intervalMs = vscode.workspace.getConfiguration('autonomousMcpHelper').get<number>('autoLoopIntervalMs', 180000);
-  autoInterval = setInterval(async () => {
-    const enabled = context.globalState.get<boolean>(AUTO_KEY, false);
-    if (!enabled) return;
-    try { const out = await runAutopilot(false); Panel.update(out); } catch (e: any) { /* ignore */ }
-  }, intervalMs);
-}
-
-function stopAutoLoop() { if (autoInterval) { clearInterval(autoInterval); autoInterval = undefined; } }
-
-async function toggleAutoLoop(context: vscode.ExtensionContext) {
-  const enabled = context.globalState.get<boolean>(AUTO_KEY, false);
-  const newVal = !enabled;
-  await context.globalState.update(AUTO_KEY, newVal);
-  if (newVal) { startAutoLoop(context); vscode.window.showInformationMessage('Auto-loop activado'); } else { stopAutoLoop(); vscode.window.showInformationMessage('Auto-loop desactivado'); }
-  Panel.postState(newVal);
-}
-
-class Panel {
-  static current: Panel | undefined;
-  static createOrShow(context: vscode.ExtensionContext) {
-    if (Panel.current) { Panel.current.panel.reveal(); return; }
-    const panel = vscode.window.createWebviewPanel('autonomousMcpHelper.control', 'Autonomous MCP Control', vscode.ViewColumn.Beside, { enableScripts: true });
-    Panel.current = new Panel(panel, context);
+  async start() {
+    if (this.isEnabled) return;
+    this.isEnabled = true;
+    this.state.isAnalyzing = true;
+    this.saveState();
+    
+    // Análisis periódico
+    const interval = vscode.workspace.getConfiguration('autonomousMcpHelper').get<number>('analysisIntervalMs', 30000);
+    this.analysisTimer = setInterval(() => this.analyzeProject(), interval);
+    
+    // Watchers de cambios
+    this.fileWatcher = vscode.workspace.onDidSaveTextDocument(() => this.onFileChange());
+    this.diagnosticWatcher = vscode.languages.onDidChangeDiagnostics(() => this.onDiagnosticsChange());
+    
+    // Análisis inicial
+    setTimeout(() => this.analyzeProject(), 2000);
+    
+    DashboardProvider.instance?.updateState(this.state);
+    vscode.window.showInformationMessage('🤖 Motor Autónomo activado');
   }
-  static update(latestAnswer: string) { Panel.current?.postMessage({ type: 'answer', payload: latestAnswer }); }
-  static postState(enabled: boolean) { Panel.current?.postMessage({ type: 'state', payload: { enabled } }); }
-  constructor(public panel: vscode.WebviewPanel, private context: vscode.ExtensionContext) {
-    panel.onDidDispose(() => { if (Panel.current === this) Panel.current = undefined; });
-    panel.webview.onDidReceiveMessage(msg => {
-      if (msg?.type === 'toggle') toggleAutoLoop(this.context);
-      if (msg?.type === 'runOnce') runAutopilot();
-    });
-    this.render();
-    Panel.postState(this.context.globalState.get<boolean>(AUTO_KEY, false));
+
+  stop() {
+    if (!this.isEnabled) return;
+    this.isEnabled = false;
+    this.state.isAnalyzing = false;
+    this.saveState();
+    
+    clearInterval(this.analysisTimer);
+    this.fileWatcher?.dispose();
+    this.diagnosticWatcher?.dispose();
+    
+    DashboardProvider.instance?.updateState(this.state);
+    vscode.window.showInformationMessage('⏸️ Motor Autónomo pausado');
   }
-  render() {
-    const enabled = this.context.globalState.get<boolean>(AUTO_KEY, false);
-    this.panel.webview.html = `<!DOCTYPE html><html><head><meta charset='utf-8'/><style>
-      body{font-family:system-ui,Arial,sans-serif;padding:8px;}
-      button{margin:4px;padding:6px 10px;}
-      #status{font-weight:bold;color:${enabled?'green':'#b00'};}
-      pre{background:#111;color:#eee;padding:8px;max-height:240px;overflow:auto;}
-    </style></head><body>
-    <h2>Autonomous MCP Control (Extension)</h2>
-    <p>Estado: <span id='status'>${enabled?'ACTIVADO':'DESACTIVADO'}</span></p>
-    <button onclick="vscode.postMessage({type:'toggle'})">Toggle Auto</button>
-    <button onclick="vscode.postMessage({type:'runOnce'})">Ejecutar una vez</button>
-    <pre id='out'>(sin resultados aún)</pre>
-    <script>
-      const vscode = acquireVsCodeApi();
-      window.addEventListener('message', ev => {
-        const {type,payload} = ev.data||{};
-        if(type==='answer'){ document.getElementById('out').textContent = payload; }
-        if(type==='state'){ document.getElementById('status').textContent = payload.enabled?'ACTIVADO':'DESACTIVADO'; }
+
+  toggle() { this.isEnabled ? this.stop() : this.start(); }
+
+  private async onFileChange() {
+    if (!this.isEnabled) return;
+    // Debounce - analizar 3s después del último cambio
+    clearTimeout(this.analysisTimer as any);
+    this.analysisTimer = setTimeout(() => this.analyzeProject(), 3000);
+  }
+
+  private async onDiagnosticsChange() {
+    if (!this.isEnabled) return;
+    // Analizar errores en tiempo real
+    setTimeout(() => this.analyzeErrors(), 1000);
+  }
+
+  async analyzeProject() {
+    if (!this.isEnabled) return;
+    this.state.lastAnalysis = Date.now();
+    this.state.sessionsCount++;
+    
+    try {
+      const context = await ContextCollector.collect();
+      const suggestions = await this.generateSuggestions(context);
+      
+      this.state.currentSuggestions = suggestions;
+      this.saveState();
+      DashboardProvider.instance?.updateSuggestions(suggestions);
+      
+      // Auto-aplicar fixes simples si está habilitado
+      const autoApply = vscode.workspace.getConfiguration('autonomousMcpHelper').get<boolean>('autoApplySimpleFixes', false);
+      if (autoApply) {
+        await this.autoApplySimpleFixes(suggestions);
+      }
+      
+      // Notificaciones de sugerencias importantes
+      const showNotifications = vscode.workspace.getConfiguration('autonomousMcpHelper').get<boolean>('showNotifications', true);
+      if (showNotifications) {
+        this.showSuggestionNotifications(suggestions);
+      }
+      
+    } catch (error: any) {
+      console.error('Error en análisis:', error);
+      DashboardProvider.instance?.pushLog('error', `Error en análisis: ${error.message}`);
+    }
+  }
+
+  private async analyzeErrors() {
+    const diagnostics = vscode.languages.getDiagnostics();
+    const errors: string[] = [];
+    
+    for (const [uri, diags] of diagnostics) {
+      for (const diag of diags) {
+        if (diag.severity === vscode.DiagnosticSeverity.Error) {
+          errors.push(`${uri.fsPath}:${diag.range.start.line}: ${diag.message}`);
+        }
+      }
+    }
+    
+    if (errors.length > 0) {
+      DashboardProvider.instance?.updateErrors(errors);
+    }
+  }
+
+  private async generateSuggestions(context: any): Promise<Suggestion[]> {
+    const temperature = vscode.workspace.getConfiguration('autonomousMcpHelper').get<number>('temperature', 0.3);
+    
+    const prompt = `
+Analiza este proyecto y genera sugerencias específicas para mejorar el código.
+Contexto del proyecto:
+${JSON.stringify(context, null, 2)}
+
+Genera sugerencias en este formato JSON:
+{
+  "suggestions": [
+    {
+      "type": "fix|improvement|feature|test",
+      "title": "Título conciso",
+      "description": "Descripción detallada",
+      "code": "código específico si aplica",
+      "filePath": "ruta del archivo si aplica",
+      "priority": 1-10
+    }
+  ]
+}
+
+Prioriza correcciones de errores, mejoras de rendimiento, y tests faltantes.
+`;
+
+    try {
+      const result = await this.callMcp('mcp.openai.ask', { prompt, temperature, context: JSON.stringify(context).slice(0, 8000) });
+      const parsed = JSON.parse(result.answer);
+      
+      return parsed.suggestions.map((s: any, i: number) => ({
+        id: `${Date.now()}-${i}`,
+        type: s.type || 'improvement',
+        title: s.title || 'Sugerencia',
+        description: s.description || '',
+        code: s.code,
+        filePath: s.filePath,
+        priority: s.priority || 5,
+        timestamp: Date.now(),
+        applied: false
+      }));
+    } catch (error) {
+      console.error('Error generando sugerencias:', error);
+      return [];
+    }
+  }
+
+  private async autoApplySimpleFixes(suggestions: Suggestion[]) {
+    const simpleFixes = suggestions.filter(s => 
+      s.type === 'fix' && 
+      s.priority >= 8 && 
+      s.code && 
+      s.filePath &&
+      (s.title.includes('import') || s.title.includes('format') || s.title.includes('typo'))
+    );
+
+    for (const fix of simpleFixes) {
+      try {
+        await ActionEngine.applySuggestion(fix);
+        fix.applied = true;
+        this.state.suggestionsApplied++;
+        DashboardProvider.instance?.pushLog('info', `Auto-aplicado: ${fix.title}`);
+      } catch (error) {
+        console.error('Error auto-aplicando fix:', error);
+      }
+    }
+  }
+
+  private showSuggestionNotifications(suggestions: Suggestion[]) {
+    const highPriority = suggestions.filter(s => s.priority >= 8);
+    
+    for (const suggestion of highPriority.slice(0, 2)) { // Max 2 notificaciones
+      vscode.window.showInformationMessage(
+        `💡 ${suggestion.title}`,
+        'Ver Dashboard', 'Aplicar'
+      ).then(action => {
+        if (action === 'Ver Dashboard') {
+          vscode.commands.executeCommand('autonomousMcpDashboard.focus');
+        } else if (action === 'Aplicar') {
+          ActionEngine.applySuggestion(suggestion);
+        }
       });
-    </script>
-    </body></html>`;
+    }
   }
-  postMessage(msg: any) { this.panel.webview.postMessage(msg); }
+
+  private async callMcp(method: string, params: any) {
+    const body = { jsonrpc: '2.0', id: Date.now(), method, params };
+    const resp = await fetch(SERVER_URL, { 
+      method: 'POST', 
+      headers: { 'Content-Type': 'application/json' }, 
+      body: JSON.stringify(body) 
+    });
+    
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error.message || 'Error MCP');
+    return data.result;
+  }
+
+  private loadState(): ProjectState {
+    return this.context.globalState.get(STATE_KEY, {
+      isAnalyzing: false,
+      lastAnalysis: 0,
+      sessionsCount: 0,
+      suggestionsApplied: 0,
+      errorsFixed: 0,
+      currentSuggestions: []
+    });
+  }
+
+  private saveState() {
+    this.context.globalState.update(STATE_KEY, this.state);
+  }
+
+  getState() { return this.state; }
+}
+
+class ContextCollector {
+  static async collect() {
+    const editor = vscode.window.activeTextEditor;
+    const workspace = vscode.workspace.workspaceFolders?.[0];
+    
+    const context = {
+      activeFile: editor ? {
+        path: editor.document.fileName,
+        content: editor.document.getText().slice(0, 10000),
+        language: editor.document.languageId,
+        hasErrors: vscode.languages.getDiagnostics(editor.document.uri).some(d => d.severity === vscode.DiagnosticSeverity.Error)
+      } : null,
+      
+      workspace: workspace ? {
+        name: workspace.name,
+        path: workspace.uri.fsPath
+      } : null,
+      
+      errors: this.collectErrors(),
+      
+      recentFiles: await this.getRecentFiles(),
+      
+      gitStatus: await this.getGitStatus(),
+      
+      projectStructure: await this.getProjectStructure()
+    };
+    
+    return context;
+  }
+
+  private static collectErrors() {
+    const diagnostics = vscode.languages.getDiagnostics();
+    const errors: any[] = [];
+    
+    for (const [uri, diags] of diagnostics) {
+      for (const diag of diags) {
+        if (diag.severity <= vscode.DiagnosticSeverity.Warning) {
+          errors.push({
+            file: uri.fsPath,
+            line: diag.range.start.line,
+            message: diag.message,
+            severity: diag.severity
+          });
+        }
+      }
+    }
+    
+    return errors.slice(0, 20); // Limitar a 20 errores
+  }
+
+  private static async getRecentFiles() {
+    // Simplificado - podrías usar extensiones como git history
+    return [];
+  }
+
+  private static async getGitStatus() {
+    try {
+      const gitExtension = vscode.extensions.getExtension('vscode.git')?.exports;
+      if (gitExtension) {
+        const repo = gitExtension.getRepository(vscode.workspace.workspaceFolders?.[0]?.uri);
+        if (repo) {
+          return {
+            branch: repo.state.HEAD?.name || 'unknown',
+            changes: repo.state.workingTreeChanges.length,
+            staged: repo.state.indexChanges.length
+          };
+        }
+      }
+    } catch (error) {
+      console.error('Error getting git status:', error);
+    }
+    return null;
+  }
+
+  private static async getProjectStructure() {
+    const workspace = vscode.workspace.workspaceFolders?.[0];
+    if (!workspace) return null;
+    
+    try {
+      const files = await vscode.workspace.findFiles('**/*.{js,ts,py,json,md}', '**/node_modules/**', 20);
+      return {
+        totalFiles: files.length,
+        types: this.categorizeFiles(files)
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  private static categorizeFiles(files: vscode.Uri[]) {
+    const types: Record<string, number> = {};
+    files.forEach(file => {
+      const ext = file.fsPath.split('.').pop() || 'unknown';
+      types[ext] = (types[ext] || 0) + 1;
+    });
+    return types;
+  }
+}
+
+class ActionEngine {
+  static async applySuggestion(suggestion: Suggestion) {
+    if (!suggestion.code || !suggestion.filePath) {
+      throw new Error('Sugerencia sin código o archivo especificado');
+    }
+
+    try {
+      const uri = vscode.Uri.file(suggestion.filePath);
+      const document = await vscode.workspace.openTextDocument(uri);
+      
+      const edit = new vscode.WorkspaceEdit();
+      
+      // Aplicar al final del archivo por simplicidad
+      // En una implementación real, sería más inteligente
+      const lastLine = document.lineCount - 1;
+      const lastCharacter = document.lineAt(lastLine).text.length;
+      
+      edit.insert(uri, new vscode.Position(lastLine, lastCharacter), `\n\n// Auto-sugerido: ${suggestion.title}\n${suggestion.code}\n`);
+      
+      await vscode.workspace.applyEdit(edit);
+      
+      vscode.window.showInformationMessage(`✅ Aplicado: ${suggestion.title}`);
+      
+      const engine = AutonomousEngine.getInstance();
+      const state = engine.getState();
+      state.suggestionsApplied++;
+      
+    } catch (error: any) {
+      vscode.window.showErrorMessage(`Error aplicando sugerencia: ${error.message}`);
+      throw error;
+    }
+  }
+}
+
+class DashboardProvider implements vscode.WebviewViewProvider {
+  public static readonly viewId = 'autonomousMcpDashboard';
+  public static instance: DashboardProvider | undefined;
+  private _view: vscode.WebviewView | undefined;
+  private logs: Array<{level: string, message: string, timestamp: number}> = [];
+
+  constructor(private context: vscode.ExtensionContext) { 
+    console.log('🏗️ DashboardProvider constructor called');
+    DashboardProvider.instance = this; 
+  }
+
+  resolveWebviewView(webviewView: vscode.WebviewView) {
+    console.log('🎨 DashboardProvider resolveWebviewView called');
+    this._view = webviewView;
+    webviewView.webview.options = { enableScripts: true };
+    webviewView.webview.onDidReceiveMessage(msg => this.handleMessage(msg));
+    this.render();
+    console.log('✅ DashboardProvider webview resolved');
+  }
+
+  private handleMessage(msg: any) {
+    const engine = AutonomousEngine.getInstance();
+    
+    switch (msg?.type) {
+      case 'toggle':
+        engine.toggle();
+        break;
+      case 'manualRun':
+        engine.analyzeProject();
+        break;
+      case 'applySuggestion':
+        const suggestion = engine.getState().currentSuggestions.find(s => s.id === msg.id);
+        if (suggestion) ActionEngine.applySuggestion(suggestion);
+        break;
+      case 'updateConfig':
+        this.updateConfiguration(msg.config);
+        break;
+    }
+  }
+
+  private async updateConfiguration(config: any) {
+    const vscodeConfig = vscode.workspace.getConfiguration('autonomousMcpHelper');
+    
+    for (const [key, value] of Object.entries(config)) {
+      try {
+        await vscodeConfig.update(key, value, vscode.ConfigurationTarget.Global);
+      } catch (error) {
+        console.error(`Error updating config ${key}:`, error);
+      }
+    }
+    
+    this.pushLog('info', 'Configuración actualizada');
+    this.render();
+  }
+
+  updateState(state: ProjectState) {
+    this.postMessage({ type: 'stateUpdate', state });
+  }
+
+  updateSuggestions(suggestions: Suggestion[]) {
+    this.postMessage({ type: 'suggestionsUpdate', suggestions });
+  }
+
+  updateErrors(errors: string[]) {
+    this.postMessage({ type: 'errorsUpdate', errors });
+  }
+
+  pushLog(level: string, message: string) {
+    this.logs.unshift({ level, message, timestamp: Date.now() });
+    if (this.logs.length > 50) this.logs = this.logs.slice(0, 50);
+    this.postMessage({ type: 'logUpdate', logs: this.logs.slice(0, 10) });
+  }
+
+  private postMessage(msg: any) {
+    this._view?.webview.postMessage(msg);
+  }
+
+  private render() {
+    if (!this._view) return;
+    
+    const config = vscode.workspace.getConfiguration('autonomousMcpHelper');
+    const state = AutonomousEngine.getInstance()?.getState() || {};
+    
+    this._view.webview.html = `<!DOCTYPE html>
+<html><head><meta charset='utf-8'>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 12px; font-size: 13px; }
+  .header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+  .status { padding: 4px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .status.active { background: #10b981; color: white; }
+  .status.inactive { background: #6b7280; color: white; }
+  .metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 16px; }
+  .metric { background: var(--vscode-editor-background); border: 1px solid var(--vscode-editorWidget-border); border-radius: 6px; padding: 8px; text-align: center; }
+  .metric-value { font-size: 18px; font-weight: bold; color: var(--vscode-charts-blue); }
+  .metric-label { font-size: 10px; opacity: 0.7; margin-top: 2px; }
+  .section { margin-bottom: 16px; }
+  .section-title { font-weight: 600; margin-bottom: 8px; font-size: 12px; }
+  .suggestion { background: var(--vscode-editor-background); border: 1px solid var(--vscode-editorWidget-border); border-radius: 4px; padding: 8px; margin-bottom: 6px; }
+  .suggestion-title { font-weight: 600; font-size: 12px; }
+  .suggestion-desc { font-size: 11px; opacity: 0.8; margin: 4px 0; }
+  .suggestion-actions { display: flex; gap: 4px; margin-top: 6px; }
+  .btn { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 3px; padding: 4px 8px; font-size: 10px; cursor: pointer; }
+  .btn:hover { background: var(--vscode-button-hoverBackground); }
+  .btn-secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .config-grid { display: grid; gap: 8px; }
+  .config-item { display: flex; align-items: center; gap: 8px; }
+  .config-item label { flex: 1; font-size: 11px; }
+  .config-item input { width: 80px; }
+  .logs { max-height: 120px; overflow-y: auto; }
+  .log { font-size: 10px; padding: 2px 0; border-bottom: 1px solid var(--vscode-editorWidget-border); }
+  .log.error { color: var(--vscode-errorForeground); }
+  .log.info { color: var(--vscode-charts-green); }
+  .priority { padding: 2px 4px; border-radius: 2px; font-size: 9px; font-weight: bold; }
+  .priority-high { background: #ef4444; color: white; }
+  .priority-medium { background: #f59e0b; color: white; }
+  .priority-low { background: #6b7280; color: white; }
+</style>
+</head><body>
+  <div class="header">
+    <h3 style="margin:0; flex:1;">🤖 Autonomous Copilot</h3>
+    <div class="status ${state.isAnalyzing ? 'active' : 'inactive'}" id="status">
+      ${state.isAnalyzing ? 'ACTIVO' : 'PAUSADO'}
+    </div>
+  </div>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="metric-value" id="sessionsCount">${state.sessionsCount || 0}</div>
+      <div class="metric-label">Sesiones</div>
+    </div>
+    <div class="metric">
+      <div class="metric-value" id="suggestionsApplied">${state.suggestionsApplied || 0}</div>
+      <div class="metric-label">Aplicadas</div>
+    </div>
+    <div class="metric">
+      <div class="metric-value" id="errorsFixed">${state.errorsFixed || 0}</div>
+      <div class="metric-label">Errores</div>
+    </div>
+    <div class="metric">
+      <div class="metric-value" id="lastAnalysis">${state.lastAnalysis ? new Date(state.lastAnalysis).toLocaleTimeString() : 'N/A'}</div>
+      <div class="metric-label">Último</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Controles</div>
+    <div style="display: flex; gap: 6px;">
+      <button class="btn" onclick="send('toggle')">${state.isAnalyzing ? 'Pausar' : 'Iniciar'}</button>
+      <button class="btn btn-secondary" onclick="send('manualRun')">Analizar Ahora</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Configuración</div>
+    <div class="config-grid">
+      <div class="config-item">
+        <label>Intervalo (min)</label>
+        <input type="number" id="interval" value="${((config.get('analysisIntervalMs') as number) || 30000) / 60000}" min="0.5" step="0.5">
+      </div>
+      <div class="config-item">
+        <label>Contexto</label>
+        <input type="number" id="contextLines" value="${config.get('contextLines') || 500}" min="100" step="50">
+      </div>
+      <div class="config-item">
+        <label>Temperatura</label>
+        <input type="range" id="temperature" value="${config.get('temperature') || 0.3}" min="0" max="1" step="0.1">
+        <span id="tempValue">${config.get('temperature') || 0.3}</span>
+      </div>
+      <div class="config-item">
+        <label>Auto-aplicar</label>
+        <input type="checkbox" id="autoApply" ${config.get('autoApplySimpleFixes') ? 'checked' : ''}>
+      </div>
+    </div>
+    <button class="btn" onclick="saveConfig()" style="margin-top: 8px;">Guardar</button>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Sugerencias Activas (<span id="suggestionsCount">0</span>)</div>
+    <div id="suggestions"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Logs</div>
+    <div class="logs" id="logs"></div>
+  </div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    function send(type, data) { vscode.postMessage({ type, ...data }); }
+    
+    function saveConfig() {
+      const config = {
+        analysisIntervalMs: parseFloat(document.getElementById('interval').value) * 60000,
+        contextLines: parseInt(document.getElementById('contextLines').value),
+        temperature: parseFloat(document.getElementById('temperature').value),
+        autoApplySimpleFixes: document.getElementById('autoApply').checked
+      };
+      send('updateConfig', { config });
+    }
+
+    function applySuggestion(id) { send('applySuggestion', { id }); }
+
+    document.getElementById('temperature').oninput = function() {
+      document.getElementById('tempValue').textContent = this.value;
+    };
+
+    window.addEventListener('message', event => {
+      const { type, state, suggestions, errors, logs } = event.data;
+      
+      if (type === 'stateUpdate') {
+        document.getElementById('status').textContent = state.isAnalyzing ? 'ACTIVO' : 'PAUSADO';
+        document.getElementById('status').className = 'status ' + (state.isAnalyzing ? 'active' : 'inactive');
+        document.getElementById('sessionsCount').textContent = state.sessionsCount || 0;
+        document.getElementById('suggestionsApplied').textContent = state.suggestionsApplied || 0;
+        document.getElementById('errorsFixed').textContent = state.errorsFixed || 0;
+        document.getElementById('lastAnalysis').textContent = state.lastAnalysis ? new Date(state.lastAnalysis).toLocaleTimeString() : 'N/A';
+      }
+      
+      if (type === 'suggestionsUpdate') {
+        document.getElementById('suggestionsCount').textContent = suggestions.length;
+        const container = document.getElementById('suggestions');
+        container.innerHTML = suggestions.map(s => \`
+          <div class="suggestion">
+            <div class="suggestion-title">
+              \${s.title}
+              <span class="priority priority-\${s.priority >= 8 ? 'high' : s.priority >= 5 ? 'medium' : 'low'}">\${s.priority}</span>
+            </div>
+            <div class="suggestion-desc">\${s.description}</div>
+            <div class="suggestion-actions">
+              <button class="btn" onclick="applySuggestion('\${s.id}')">Aplicar</button>
+              <button class="btn btn-secondary">Ver Código</button>
+            </div>
+          </div>
+        \`).join('');
+      }
+      
+      if (type === 'logUpdate') {
+        const container = document.getElementById('logs');
+        container.innerHTML = logs.map(l => \`
+          <div class="log \${l.level}">[\${new Date(l.timestamp).toLocaleTimeString()}] \${l.message}</div>
+        \`).join('');
+      }
+    });
+  </script>
+</body></html>`;
+  }
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  const runCmd = vscode.commands.registerCommand('autonomousMcpHelper.runAutopilot', () => runAutopilot());
-  const toggleCmd = vscode.commands.registerCommand('autonomousMcpHelper.toggleAutoLoop', () => toggleAutoLoop(context));
-  const panelCmd = vscode.commands.registerCommand('autonomousMcpHelper.showControl', () => Panel.createOrShow(context));
-  context.subscriptions.push(runCmd, toggleCmd, panelCmd);
-  if (context.globalState.get<boolean>(AUTO_KEY, false)) startAutoLoop(context);
+  console.log('🚀 Autonomous MCP Helper activating...');
+  
+  const engine = new AutonomousEngine(context);
+  const dashboardProvider = new DashboardProvider(context);
+  
+  // Comandos
+  const manualRunCmd = vscode.commands.registerCommand('autonomousMcpHelper.manualRun', () => {
+    console.log('📋 Manual run command executed');
+    engine.analyzeProject();
+  });
+  const toggleCmd = vscode.commands.registerCommand('autonomousMcpHelper.toggleEngine', () => {
+    console.log('🔄 Toggle engine command executed');
+    engine.toggle();
+  });
+  
+  // Vista
+  const viewProvider = vscode.window.registerWebviewViewProvider(DashboardProvider.viewId, dashboardProvider);
+  console.log('📊 Dashboard provider registered with ID:', DashboardProvider.viewId);
+  
+  context.subscriptions.push(manualRunCmd, toggleCmd, viewProvider);
+  
+  // Auto-start si está habilitado
+  const enabled = vscode.workspace.getConfiguration('autonomousMcpHelper').get<boolean>('enabled', true);
+  console.log('⚙️ Auto-start enabled:', enabled);
+  if (enabled) {
+    setTimeout(() => {
+      console.log('🎯 Starting autonomous engine...');
+      engine.start();
+    }, 1000);
+  }
+  
+  console.log('✅ Autonomous MCP Helper activated successfully');
 }
 
-export function deactivate() { stopAutoLoop(); }
+export function deactivate() {
+  AutonomousEngine.getInstance()?.stop();
+}
