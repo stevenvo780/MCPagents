@@ -1,0 +1,35 @@
+{
+  "name": "mcp-server-ts",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/mcp/server.ts",
+    "start:stdio": "ts-node src/mcp/stdio-server.ts",
+    "dev": "ts-node --transpile-only src/mcp/server.ts",
+    "dev:stdio": "ts-node --transpile-only src/mcp/stdio-server.ts",
+    "test": "echo \"No tests\" && exit 0"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.2",
+    "@types/express": "^5.0.3",
+    "@types/node-fetch": "^2.6.13",
+    "@types/uuid": "^10.0.0",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "fast-json-patch": "^3.1.1",
+    "node-fetch": "^2.7.0",
+    "uuid": "^11.1.0",
+    "winston": "^3.17.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  }
+}
