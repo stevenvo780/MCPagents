@@ -153,7 +153,62 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
+// Definición de herramientas MCP disponibles
+const mcpTools = [
+  {
+    name: 'mcp_autonomous_ask',
+    description: 'Ask a question to the autonomous copilot with OpenAI integration',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'The question to ask' },
+        system: { type: 'string', description: 'System prompt to guide the response' },
+        temperature: { type: 'number', description: 'Temperature for response creativity (0-2)', minimum: 0, maximum: 2, default: 0.7 },
+        maxTokens: { type: 'number', description: 'Maximum tokens in response', default: 2000 },
+        context: { type: 'string', description: 'Additional context for the question' },
+      },
+      required: ['question'],
+    },
+  },
+  {
+    name: 'mcp_autonomous_analyze_code',
+    description: 'Analyze code with the autonomous copilot',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        code: { type: 'string', description: 'The code to analyze' },
+        language: { type: 'string', description: 'Programming language of the code', default: 'typescript' },
+        task: { type: 'string', description: 'Type of analysis to perform', enum: ['analyze', 'fix', 'optimize', 'explain'], default: 'analyze' },
+      },
+      required: ['code'],
+    },
+  },
+  {
+    name: 'mcp_autonomous_health',
+    description: 'Check the health status of the autonomous copilot',
+    inputSchema: { type: 'object', properties: {} },
+  },
+];
+
 // Endpoint compatible con JSON-RPC (para compatibilidad con MCP)
+// Manejar tanto GET como POST para compatibilidad con MCP clients
+app.get('/jsonrpc', (req, res) => {
+  res.json({
+    jsonrpc: '2.0',
+    result: {
+      protocolVersion: '2024-11-05',
+      capabilities: { 
+        tools: {},
+        experimental: {}
+      },
+      serverInfo: {
+        name: 'mcpagents-autonomous-web',
+        version: '1.0.0'
+      }
+    }
+  });
+});
+
 app.post('/jsonrpc', async (req, res) => {
   try {
     const { jsonrpc, id, method, params } = req.body;
@@ -169,6 +224,93 @@ app.post('/jsonrpc', async (req, res) => {
     let result;
     
     switch (method) {
+      case 'initialize': {
+        result = {
+          protocolVersion: '2024-11-05',
+          capabilities: { 
+            tools: {},
+            experimental: {}
+          },
+          serverInfo: {
+            name: 'mcpagents-autonomous-web',
+            version: '1.0.0'
+          }
+        };
+        break;
+      }
+      case 'tools/list': {
+        result = {
+          tools: mcpTools
+        };
+        break;
+      }
+      case 'tools/call': {
+        const { name, arguments: args } = params;
+        
+        switch (name) {
+          case 'mcp_autonomous_ask': {
+            const { question, system, temperature = 0.7, maxTokens = 2000, context } = args;
+            const openaiResult = await openaiAsk({
+              prompt: question,
+              system: system || 'Eres el Autonomous Copilot, un asistente de IA avanzado especializado en programación y desarrollo. Responde en español de manera amigable y profesional.',
+              temperature,
+              maxTokens,
+              context,
+            });
+            result = {
+              content: [{ 
+                type: 'text', 
+                text: openaiResult.answer || 'No se pudo obtener respuesta' 
+              }]
+            };
+            break;
+          }
+          case 'mcp_autonomous_analyze_code': {
+            const { code, language = 'typescript', task = 'analyze' } = args;
+            if (!code) throw new Error('Código es requerido para el análisis');
+            
+            const systemPrompt = `Eres un experto en ${language} que analiza código y proporciona sugerencias específicas y prácticas.\n\nTarea: ${task}\n\nINSTRUCCIONES:\n- Proporciona análisis detallado y específico\n- Sugiere mejoras concretas con ejemplos de código\n- Identifica patrones, problemas potenciales y optimizaciones\n- Sé conciso pero completo\n- Formatea la respuesta en Markdown`;
+            
+            const prompt = `Analiza este código ${language} y ${task === 'fix' ? 'encuentra errores y sugiere correcciones' : task === 'optimize' ? 'sugiere optimizaciones' : task === 'explain' ? 'explica cómo funciona' : 'proporciona sugerencias de mejora'}:\n\n\`\`\`${language}\n${code}\n\`\`\``;
+            
+            const openaiResult = await openaiAsk({ 
+              prompt, 
+              system: systemPrompt, 
+              temperature: 0.2, 
+              maxTokens: 3000 
+            });
+            
+            result = {
+              content: [{ 
+                type: 'text', 
+                text: openaiResult.answer || 'No se pudo analizar el código' 
+              }]
+            };
+            break;
+          }
+          case 'mcp_autonomous_health': {
+            result = {
+              content: [{ 
+                type: 'text', 
+                text: JSON.stringify({
+                  status: 'ok',
+                  timestamp: new Date().toISOString(),
+                  server: 'mcpagents-autonomous-web',
+                  version: '1.0.0'
+                }, null, 2)
+              }]
+            };
+            break;
+          }
+          default:
+            return res.status(404).json({
+              jsonrpc: '2.0',
+              id,
+              error: { code: -32601, message: `Unknown tool: ${name}` }
+            });
+        }
+        break;
+      }
       case 'mcp.openai.ask': {
         const { prompt, system, temperature, maxTokens, context } = params;
         result = await openaiAsk({ prompt, system, temperature, maxTokens, context });
