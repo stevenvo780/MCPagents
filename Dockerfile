@@ -12,7 +12,6 @@ RUN npm ci --only=production
 
 # Copiar el código fuente
 COPY web-server.js ./
-COPY .env ./
 
 # Crear usuario no-root para seguridad
 RUN addgroup -g 1001 -S nodejs
