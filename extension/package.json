@@ -189,6 +189,11 @@
         "command": "autonomousMcpHelper.mcpContext",
         "title": "MCP: Get Project Context",
         "icon": "$(info)"
+      },
+      {
+        "command": "autonomousMcpHelper.testHistory",
+        "title": "MCP: Test History (Debug)",
+        "icon": "$(debug-console)"
       }
     ],
     "viewsContainers": {

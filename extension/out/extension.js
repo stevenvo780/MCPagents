@@ -1759,6 +1759,46 @@ ${code}
             vscode.window.showErrorMessage(`❌ Error generando contexto: ${error}`);
         }
     });
+    // ⭐ NUEVO: Comando para probar el historial
+    const testHistoryCmd = vscode.commands.registerCommand('autonomousMcpHelper.testHistory', async () => {
+        const engine = AutonomousEngine.getInstance();
+        if (engine) {
+            // Agregar algunas entradas de prueba
+            engine.addHistoryEntry({
+                timestamp: Date.now(),
+                type: 'analysis',
+                description: 'Análisis automático del proyecto iniciado',
+                success: true,
+                file: vscode.window.activeTextEditor?.document.fileName
+            });
+            engine.addHistoryEntry({
+                timestamp: Date.now() - 5000,
+                type: 'suggestion',
+                description: 'Sugerencia aplicada: Optimización de función',
+                success: true,
+                details: { suggestion: 'Refactorizar loop' }
+            });
+            engine.addHistoryEntry({
+                timestamp: Date.now() - 10000,
+                type: 'application',
+                description: 'MCP Server consultado exitosamente',
+                success: true
+            });
+            engine.addHistoryEntry({
+                timestamp: Date.now() - 15000,
+                type: 'error',
+                description: 'Error de conexión al MCP Server',
+                success: false,
+                details: { error: 'Connection timeout' }
+            });
+            // Forzar actualización de vistas
+            setTimeout(() => {
+                historyProvider.updateContent();
+                dashboardProvider.updateContent();
+            }, 500);
+            vscode.window.showInformationMessage('✅ Historial de prueba generado. Revisa la vista de historial.');
+        }
+    });
     // Registrar vistas
     console.log('📊 Registrando view providers...');
     console.log('  - Dashboard viewId:', DashboardProvider.viewId);
@@ -1776,7 +1816,8 @@ ${code}
     console.log('  - DashboardProvider:', dashboardProvider ? '✅' : '❌');
     console.log('  - HistoryProvider:', historyProvider ? '✅' : '❌');
     console.log('  - SettingsProvider:', settingsProvider ? '✅' : '❌');
-    context.subscriptions.push(manualRunCmd, toggleCmd, clearHistoryCmd, exportHistoryCmd, resetSettingsCmd, mcpAskCmd, mcpAnalyzeCodeCmd, mcpHealthCmd, mcpContextCmd, participant, // ⭐ NUEVO: Chat Participant
+    context.subscriptions.push(manualRunCmd, toggleCmd, clearHistoryCmd, exportHistoryCmd, resetSettingsCmd, mcpAskCmd, mcpAnalyzeCodeCmd, mcpHealthCmd, mcpContextCmd, testHistoryCmd, // ⭐ NUEVO comando de prueba
+    participant, // ⭐ NUEVO: Chat Participant
     dashboardViewProvider, historyViewProvider, settingsViewProvider);
     // Auto-start si está habilitado
     const enabled = vscode.workspace.getConfiguration('autonomousMcpHelper').get('enabled', true);
