@@ -18,8 +18,8 @@ function makeJsonRpcResult(id: string | number | null, result: any): JsonRpcResp
 function makeJsonRpcError(id: string | number | null, code: number, message: string, data?: any): JsonRpcResponse { return { jsonrpc: JSONRPC_VERSION, id, error: { code, message, data } }; }
 
 function wrapAutoresponder(params: any) {
-  const { question, prompt, context, system, model, temperature } = params || {};
-  return openaiAsk({ prompt: prompt || question, context, system, model, temperature });
+  const { question, prompt, context, system, model, temperature, force, cache } = params || {};
+  return openaiAsk({ prompt: prompt || question, context, system, model, temperature, force: !!force, cache: cache !== false });
 }
 
 const mcpMethods: { [key: string]: { handler: Function; schema: z.ZodSchema<any>; meta?: any } } = {
