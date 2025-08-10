@@ -100,12 +100,25 @@ class AutonomousEngine {
             return;
         this.state.lastAnalysis = Date.now();
         this.state.sessionsCount++;
+        const startTime = Date.now();
+        this.addHistoryEntry({
+            timestamp: startTime,
+            type: 'analysis',
+            description: 'Iniciando análisis automático del proyecto'
+        });
         try {
             const context = await ContextCollector.collect();
             const suggestions = await this.generateSuggestions(context);
             this.state.currentSuggestions = suggestions;
             this.saveState();
             DashboardProvider.instance?.updateSuggestions(suggestions);
+            this.addHistoryEntry({
+                timestamp: Date.now(),
+                type: 'analysis',
+                description: `Análisis completado: ${suggestions.length} sugerencias generadas`,
+                success: true,
+                details: { suggestionsCount: suggestions.length, duration: Date.now() - startTime }
+            });
             // Auto-aplicar fixes simples si está habilitado
             const autoApply = vscode.workspace.getConfiguration('autonomousMcpHelper').get('autoApplySimpleFixes', false);
             if (autoApply) {
@@ -119,6 +132,13 @@ class AutonomousEngine {
         }
         catch (error) {
             console.error('Error en análisis:', error);
+            this.addHistoryEntry({
+                timestamp: Date.now(),
+                type: 'error',
+                description: `Error en análisis: ${error.message}`,
+                success: false,
+                details: error
+            });
             DashboardProvider.instance?.pushLog('error', `Error en análisis: ${error.message}`);
         }
     }
@@ -231,11 +251,20 @@ Prioriza correcciones de errores, mejoras de rendimiento, y tests faltantes.
             sessionsCount: 0,
             suggestionsApplied: 0,
             errorsFixed: 0,
-            currentSuggestions: []
+            currentSuggestions: [],
+            history: []
         });
     }
     saveState() {
         this.context.globalState.update(STATE_KEY, this.state);
+    }
+    addHistoryEntry(entry) {
+        this.state.history.push(entry);
+        // Keep only last 100 entries
+        if (this.state.history.length > 100) {
+            this.state.history = this.state.history.slice(-100);
+        }
+        this.saveState();
     }
     getState() { return this.state; }
 }
@@ -588,11 +617,901 @@ class DashboardProvider {
     }
 }
 DashboardProvider.viewId = 'autonomousMcpDashboard';
+// History Provider para la vista de historial
+class HistoryProvider {
+    constructor(context) {
+        this.context = context;
+    }
+    resolveWebviewView(webviewView, context, _token) {
+        this._view = webviewView;
+        webviewView.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [this.context.extensionUri]
+        };
+        this.updateContent();
+        webviewView.webview.onDidReceiveMessage(data => {
+            switch (data.type) {
+                case 'exportHistory':
+                    this.exportHistory();
+                    break;
+                case 'clearHistory':
+                    this.clearHistory();
+                    break;
+            }
+        });
+    }
+    updateContent() {
+        if (!this._view)
+            return;
+        const engine = AutonomousEngine.getInstance();
+        const state = engine?.getState();
+        const history = state?.history || [];
+        this._view.webview.html = this.getHistoryHtml(history);
+    }
+    async exportHistory() {
+        const engine = AutonomousEngine.getInstance();
+        const state = engine?.getState();
+        const history = state?.history || [];
+        const jsonData = JSON.stringify(history, null, 2);
+        const document = await vscode.workspace.openTextDocument({
+            content: jsonData,
+            language: 'json'
+        });
+        vscode.window.showTextDocument(document);
+    }
+    clearHistory() {
+        const engine = AutonomousEngine.getInstance();
+        if (engine) {
+            const state = engine.getState();
+            state.history = [];
+            engine.addHistoryEntry({
+                timestamp: Date.now(),
+                type: 'application',
+                description: 'Historial limpiado',
+                success: true
+            });
+            this.updateContent();
+        }
+    }
+    getHistoryHtml(history) {
+        return `<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Historial</title>
+    <style>
+        body {
+            font-family: var(--vscode-font-family);
+            font-size: var(--vscode-font-size);
+            line-height: var(--vscode-font-weight);
+            color: var(--vscode-foreground);
+            background-color: var(--vscode-editor-background);
+            margin: 0;
+            padding: 10px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--vscode-widget-border);
+            padding-bottom: 10px;
+        }
+        .controls {
+            display: flex;
+            gap: 5px;
+        }
+        button {
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+        button:hover {
+            background: var(--vscode-button-hoverBackground);
+        }
+        .history-item {
+            margin-bottom: 10px;
+            padding: 8px;
+            border-radius: 3px;
+            border-left: 3px solid var(--vscode-textLink-foreground);
+        }
+        .history-item.analysis { border-left-color: #4CAF50; }
+        .history-item.suggestion { border-left-color: #2196F3; }
+        .history-item.application { border-left-color: #FF9800; }
+        .history-item.error { border-left-color: #F44336; }
+        .timestamp {
+            font-size: 10px;
+            color: var(--vscode-descriptionForeground);
+            margin-bottom: 2px;
+        }
+        .description {
+            font-weight: 500;
+            margin-bottom: 3px;
+        }
+        .details {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+        }
+        .success { color: #4CAF50; }
+        .failed { color: #F44336; }
+        .empty {
+            text-align: center;
+            color: var(--vscode-descriptionForeground);
+            font-style: italic;
+            margin-top: 50px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h3>Historial de Actividades</h3>
+        <div class="controls">
+            <button onclick="exportHistory()">Exportar</button>
+            <button onclick="clearHistory()">Limpiar</button>
+        </div>
+    </div>
+    
+    <div class="history-list">
+        ${history.length === 0 ?
+            '<div class="empty">No hay actividades registradas</div>' :
+            history.slice().reverse().map(entry => `
+            <div class="history-item ${entry.type}">
+                <div class="timestamp">${new Date(entry.timestamp).toLocaleString()}</div>
+                <div class="description">${entry.description}</div>
+                ${entry.file ? `<div class="details">Archivo: ${entry.file}</div>` : ''}
+                ${entry.success !== undefined ?
+                `<div class="details ${entry.success ? 'success' : 'failed'}">
+                    ${entry.success ? '✅ Éxito' : '❌ Error'}
+                  </div>` : ''}
+                ${entry.details ?
+                `<div class="details">Detalles: ${JSON.stringify(entry.details)}</div>` : ''}
+            </div>
+          `).join('')}
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+        
+        function exportHistory() {
+            vscode.postMessage({ type: 'exportHistory' });
+        }
+        
+        function clearHistory() {
+            if (confirm('¿Estás seguro de que quieres limpiar todo el historial?')) {
+                vscode.postMessage({ type: 'clearHistory' });
+            }
+        }
+    </script>
+</body>
+</html>`;
+    }
+}
+HistoryProvider.viewId = 'autonomousMcpHistory';
+// Settings Provider para la vista de configuración
+class SettingsProvider {
+    constructor(context) {
+        this.context = context;
+    }
+    resolveWebviewView(webviewView, context, _token) {
+        this._view = webviewView;
+        webviewView.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [this.context.extensionUri]
+        };
+        this.updateContent();
+        webviewView.webview.onDidReceiveMessage(data => {
+            switch (data.type) {
+                case 'updateSettings':
+                    this.updateSettings(data.settings);
+                    break;
+                case 'resetSettings':
+                    this.resetSettings();
+                    break;
+                case 'testConnection':
+                    this.testOpenAIConnection();
+                    break;
+            }
+        });
+    }
+    updateContent() {
+        if (!this._view)
+            return;
+        this._view.webview.html = this.getSettingsHtml();
+    }
+    async updateSettings(settings) {
+        const config = vscode.workspace.getConfiguration('autonomousMcpHelper');
+        for (const [key, value] of Object.entries(settings)) {
+            await config.update(key, value, vscode.ConfigurationTarget.Global);
+        }
+        vscode.window.showInformationMessage('⚙️ Configuración actualizada');
+        this.updateContent();
+    }
+    async resetSettings() {
+        const config = vscode.workspace.getConfiguration('autonomousMcpHelper');
+        const keys = [
+            'enabled', 'openaiApiKey', 'openaiModel', 'maxTokens',
+            'analysisIntervalMs', 'contextLines', 'autoApplySimpleFixes',
+            'showNotifications', 'temperature'
+        ];
+        for (const key of keys) {
+            await config.update(key, undefined, vscode.ConfigurationTarget.Global);
+        }
+        vscode.window.showInformationMessage('🔄 Configuración restablecida a valores por defecto');
+        this.updateContent();
+    }
+    async testOpenAIConnection() {
+        try {
+            const config = vscode.workspace.getConfiguration('autonomousMcpHelper');
+            const apiKey = config.get('openaiApiKey');
+            if (!apiKey) {
+                vscode.window.showWarningMessage('⚠️ API Key de OpenAI no configurada');
+                return;
+            }
+            const response = await (0, node_fetch_1.default)(SERVER_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: 1,
+                    method: 'openaiAsk',
+                    params: { question: 'test connection' }
+                })
+            });
+            if (response.ok) {
+                vscode.window.showInformationMessage('✅ Conexión con OpenAI exitosa');
+            }
+            else {
+                vscode.window.showErrorMessage('❌ Error al conectar con OpenAI');
+            }
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`❌ Error: ${error}`);
+        }
+    }
+    getSettingsHtml() {
+        const config = vscode.workspace.getConfiguration('autonomousMcpHelper');
+        return `<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuración</title>
+    <style>
+        body {
+            font-family: var(--vscode-font-family);
+            font-size: var(--vscode-font-size);
+            color: var(--vscode-foreground);
+            background-color: var(--vscode-editor-background);
+            margin: 0;
+            padding: 10px;
+        }
+        .header {
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--vscode-widget-border);
+            padding-bottom: 10px;
+        }
+        .section {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid var(--vscode-widget-border);
+            border-radius: 3px;
+        }
+        .section-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: var(--vscode-textLink-foreground);
+        }
+        .field {
+            margin-bottom: 10px;
+        }
+        label {
+            display: block;
+            margin-bottom: 3px;
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+        }
+        input, select {
+            width: 100%;
+            padding: 4px 6px;
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            border-radius: 2px;
+            font-size: 11px;
+        }
+        input[type="checkbox"] {
+            width: auto;
+            margin-right: 5px;
+        }
+        button {
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            padding: 6px 12px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+            margin-right: 5px;
+        }
+        button:hover {
+            background: var(--vscode-button-hoverBackground);
+        }
+        button.secondary {
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+        }
+        .controls {
+            margin-top: 20px;
+            padding-top: 10px;
+            border-top: 1px solid var(--vscode-widget-border);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h3>Configuración Avanzada</h3>
+    </div>
+    
+    <div class="section">
+        <div class="section-title">🤖 OpenAI</div>
+        <div class="field">
+            <label>API Key</label>
+            <input type="password" id="openaiApiKey" value="${config.get('openaiApiKey') || ''}" placeholder="sk-...">
+        </div>
+        <div class="field">
+            <label>Modelo</label>
+            <select id="openaiModel">
+                <option value="gpt-4" ${config.get('openaiModel') === 'gpt-4' ? 'selected' : ''}>GPT-4</option>
+                <option value="gpt-4-turbo" ${config.get('openaiModel') === 'gpt-4-turbo' ? 'selected' : ''}>GPT-4 Turbo</option>
+                <option value="gpt-3.5-turbo" ${config.get('openaiModel') === 'gpt-3.5-turbo' ? 'selected' : ''}>GPT-3.5 Turbo</option>
+            </select>
+        </div>
+        <div class="field">
+            <label>Temperatura (0.0 = Preciso, 1.0 = Creativo)</label>
+            <input type="range" id="temperature" min="0" max="1" step="0.1" value="${config.get('temperature') || 0.3}">
+            <span id="tempValue">${config.get('temperature') || 0.3}</span>
+        </div>
+        <div class="field">
+            <label>Máximo de Tokens</label>
+            <input type="number" id="maxTokens" value="${config.get('maxTokens') || 4000}" min="100" max="8000">
+        </div>
+        <button onclick="testConnection()">Probar Conexión</button>
+    </div>
+    
+    <div class="section">
+        <div class="section-title">⚙️ Motor Autónomo</div>
+        <div class="field">
+            <label>
+                <input type="checkbox" id="enabled" ${config.get('enabled') ? 'checked' : ''}>
+                Habilitar motor autónomo
+            </label>
+        </div>
+        <div class="field">
+            <label>Intervalo de análisis (minutos)</label>
+            <input type="number" id="analysisIntervalMs" value="${(config.get('analysisIntervalMs') || 30000) / 60000}" min="0.5" step="0.5">
+        </div>
+        <div class="field">
+            <label>Líneas de contexto máximo</label>
+            <input type="number" id="contextLines" value="${config.get('contextLines') || 500}" min="100" max="2000">
+        </div>
+        <div class="field">
+            <label>
+                <input type="checkbox" id="autoApplySimpleFixes" ${config.get('autoApplySimpleFixes') ? 'checked' : ''}>
+                Auto-aplicar correcciones simples
+            </label>
+        </div>
+        <div class="field">
+            <label>
+                <input type="checkbox" id="showNotifications" ${config.get('showNotifications') ? 'checked' : ''}>
+                Mostrar notificaciones
+            </label>
+        </div>
+    </div>
+    
+    <div class="controls">
+        <button onclick="saveSettings()">💾 Guardar</button>
+        <button class="secondary" onclick="resetSettings()">🔄 Restaurar</button>
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+        
+        // Actualizar valor de temperatura en tiempo real
+        document.getElementById('temperature').addEventListener('input', function() {
+            document.getElementById('tempValue').textContent = this.value;
+        });
+        
+        function saveSettings() {
+            const settings = {
+                enabled: document.getElementById('enabled').checked,
+                openaiApiKey: document.getElementById('openaiApiKey').value,
+                openaiModel: document.getElementById('openaiModel').value,
+                temperature: parseFloat(document.getElementById('temperature').value),
+                maxTokens: parseInt(document.getElementById('maxTokens').value),
+                analysisIntervalMs: parseFloat(document.getElementById('analysisIntervalMs').value) * 60000,
+                contextLines: parseInt(document.getElementById('contextLines').value),
+                autoApplySimpleFixes: document.getElementById('autoApplySimpleFixes').checked,
+                showNotifications: document.getElementById('showNotifications').checked
+            };
+            
+            vscode.postMessage({ type: 'updateSettings', settings });
+        }
+        
+        function resetSettings() {
+            if (confirm('¿Estás seguro de que quieres restaurar toda la configuración?')) {
+                vscode.postMessage({ type: 'resetSettings' });
+            }
+        }
+        
+        function testConnection() {
+            vscode.postMessage({ type: 'testConnection' });
+        }
+    </script>
+</body>
+</html>`;
+    }
+}
+SettingsProvider.viewId = 'autonomousMcpSettings';
+// Language Model Tools para Agent Mode - Se usan automáticamente por Copilot
+class AutonomousLanguageModelTools {
+    constructor(context) {
+        this.context = context;
+    }
+    // Tool 1: Analizar código automáticamente
+    async handleAnalyzeCode(options, token) {
+        try {
+            const { code, language, task } = options.input;
+            console.log('🔧 [Tool] analyzeCode llamado:', { task, language, codeLength: code?.length });
+            const systemPrompt = `Eres un experto en ${language || 'programación'} que analiza código y proporciona sugerencias específicas y prácticas.
+
+Tarea: ${task || 'analyze'}
+
+INSTRUCCIONES:
+- Proporciona análisis detallado y específico
+- Sugiere mejoras concretas con ejemplos de código
+- Identifica patrones, problemas potenciales y optimizaciones
+- Sé conciso pero completo
+- Formatea la respuesta en Markdown`;
+            const prompt = `Analiza este código ${language || ''} y ${task === 'fix' ? 'encuentra errores y sugiere correcciones' :
+                task === 'optimize' ? 'sugiere optimizaciones' :
+                    task === 'explain' ? 'explica cómo funciona' : 'proporciona sugerencias de mejora'}:
+
+\`\`\`${language || ''}
+${code}
+\`\`\``;
+            const response = await this.callMCPServer(systemPrompt, prompt);
+            // Log en historial
+            const engine = AutonomousEngine.getInstance();
+            if (engine) {
+                engine.addHistoryEntry({
+                    timestamp: Date.now(),
+                    type: 'application',
+                    description: `Tool analyzeCode ejecutado: ${task || 'analyze'}`,
+                    success: true,
+                    details: { language, codeLength: code?.length }
+                });
+            }
+            return new vscode.LanguageModelToolResult([
+                new vscode.LanguageModelTextPart(response.answer || 'No se pudo analizar el código')
+            ]);
+        }
+        catch (error) {
+            console.error('❌ Error en analyzeCode tool:', error);
+            return new vscode.LanguageModelToolResult([
+                new vscode.LanguageModelTextPart(`Error: ${error}`)
+            ]);
+        }
+    }
+    // Tool 2: Obtener contexto del proyecto automáticamente
+    async handleGetProjectContext(options, token) {
+        try {
+            const { includeErrors, includeFiles } = options.input;
+            console.log('🔧 [Tool] getProjectContext llamado:', { includeErrors, includeFiles });
+            let context = '## Contexto del Proyecto\n\n';
+            // Archivo activo
+            const activeEditor = vscode.window.activeTextEditor;
+            if (activeEditor) {
+                const document = activeEditor.document;
+                context += `**Archivo activo:** ${document.fileName}\n`;
+                context += `**Lenguaje:** ${document.languageId}\n\n`;
+                // Código seleccionado o completo
+                const selection = activeEditor.selection;
+                if (!selection.isEmpty) {
+                    const selectedText = document.getText(selection);
+                    context += `**Código seleccionado:**\n\`\`\`${document.languageId}\n${selectedText}\n\`\`\`\n\n`;
+                }
+            }
+            // Errores y warnings
+            if (includeErrors && activeEditor) {
+                const diagnostics = vscode.languages.getDiagnostics(activeEditor.document.uri);
+                if (diagnostics.length > 0) {
+                    context += `**Errores/Warnings detectados:**\n`;
+                    diagnostics.slice(0, 10).forEach((diagnostic, index) => {
+                        context += `${index + 1}. Línea ${diagnostic.range.start.line + 1}: ${diagnostic.message}\n`;
+                    });
+                    context += '\n';
+                }
+            }
+            // Archivos del workspace
+            if (includeFiles) {
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (workspaceFolders) {
+                    context += `**Workspace:** ${workspaceFolders[0].name}\n`;
+                    // Lista archivos principales (simplificado)
+                    const files = await vscode.workspace.findFiles('**/*.{js,ts,py,java,cpp,c,cs}', '**/node_modules/**', 20);
+                    context += `**Archivos principales encontrados:** ${files.length}\n`;
+                    files.slice(0, 10).forEach(file => {
+                        context += `- ${vscode.workspace.asRelativePath(file)}\n`;
+                    });
+                }
+            }
+            return new vscode.LanguageModelToolResult([
+                new vscode.LanguageModelTextPart(context)
+            ]);
+        }
+        catch (error) {
+            console.error('❌ Error en getProjectContext tool:', error);
+            return new vscode.LanguageModelToolResult([
+                new vscode.LanguageModelTextPart(`Error obteniendo contexto: ${error}`)
+            ]);
+        }
+    }
+    // Tool 3: Consulta directa a OpenAI con contexto automático
+    async handleAskOpenAI(options, token) {
+        try {
+            const { question, includeContext, temperature } = options.input;
+            console.log('🔧 [Tool] askOpenAI llamado:', { question: question?.substring(0, 100), includeContext, temperature });
+            let systemPrompt = `Eres Autonomous AI, un asistente experto en desarrollo de software integrado en VS Code.
+
+CONTEXTO: Estás ayudando a un desarrollador en tiempo real a través del Agent Mode de GitHub Copilot.
+
+INSTRUCCIONES:
+- Responde de manera práctica y directa
+- Proporciona ejemplos de código cuando sea relevante
+- Mantén el contexto del proyecto actual
+- Sé específico y accionable en tus sugerencias
+- Formatea la respuesta en Markdown`;
+            let finalPrompt = question;
+            // Incluir contexto automático si se solicita
+            if (includeContext) {
+                const contextResult = await this.handleGetProjectContext({ input: { includeErrors: true, includeFiles: false } }, token);
+                const contextText = contextResult.content[0];
+                if (contextText instanceof vscode.LanguageModelTextPart) {
+                    finalPrompt = `${contextText.value}\n\n**Pregunta del usuario:** ${question}`;
+                }
+            }
+            const response = await this.callMCPServer(systemPrompt, finalPrompt, temperature);
+            // Log en historial
+            const engine = AutonomousEngine.getInstance();
+            if (engine) {
+                engine.addHistoryEntry({
+                    timestamp: Date.now(),
+                    type: 'suggestion',
+                    description: `Tool askOpenAI ejecutado: ${question.substring(0, 50)}...`,
+                    success: true,
+                    details: { includeContext, temperature, responseLength: response.answer?.length }
+                });
+            }
+            return new vscode.LanguageModelToolResult([
+                new vscode.LanguageModelTextPart(response.answer || 'No se pudo obtener respuesta de OpenAI')
+            ]);
+        }
+        catch (error) {
+            console.error('❌ Error en askOpenAI tool:', error);
+            return new vscode.LanguageModelToolResult([
+                new vscode.LanguageModelTextPart(`Error: ${error}`)
+            ]);
+        }
+    }
+    async callMCPServer(systemPrompt, prompt, temperature = 0.7) {
+        try {
+            const response = await (0, node_fetch_1.default)(SERVER_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: Date.now(),
+                    method: 'mcp.openai.ask',
+                    params: {
+                        question: prompt,
+                        system: systemPrompt,
+                        temperature,
+                        maxTokens: 3000
+                    }
+                })
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(data.error.message);
+            }
+            return data.result;
+        }
+        catch (error) {
+            console.error('Error llamando al servidor MCP:', error);
+            throw error;
+        }
+    }
+}
+// Chat Participant para responder automáticamente en el chat de Copilot
+class AutonomousAIChatParticipant {
+    constructor(context) {
+        this.context = context;
+    }
+    async handleChatRequest(request, context, stream, token) {
+        // Determinar el intent del usuario
+        const command = request.command || 'general';
+        const prompt = request.prompt;
+        try {
+            stream.progress('🤖 Autonomous AI está procesando tu solicitud...');
+            // Recopilar contexto del workspace actual
+            const workspaceContext = await this.collectWorkspaceContext(command);
+            // Preparar el prompt para OpenAI
+            let systemPrompt = this.getSystemPrompt(command);
+            let finalPrompt = this.buildPrompt(command, prompt, workspaceContext);
+            stream.progress('🧠 Consultando con OpenAI...');
+            // Llamar a nuestro servidor MCP
+            const response = await this.callMCPServer(systemPrompt, finalPrompt);
+            if (response && response.answer) {
+                // Procesar y mostrar la respuesta
+                stream.markdown(`## 🤖 Autonomous AI Response\n\n`);
+                stream.markdown(response.answer);
+                // Agregar botones de acción si es relevante
+                if (command === 'fix' || command === 'optimize') {
+                    stream.button({
+                        command: 'autonomousMcpHelper.manualRun',
+                        title: 'Ejecutar Análisis Completo',
+                        arguments: []
+                    });
+                }
+                // Agregar entry al historial
+                const engine = AutonomousEngine.getInstance();
+                if (engine) {
+                    engine.addHistoryEntry({
+                        timestamp: Date.now(),
+                        type: 'suggestion',
+                        description: `Chat participant respondió: ${command}`,
+                        success: true,
+                        details: { prompt, responseLength: response.answer.length }
+                    });
+                }
+            }
+            else {
+                stream.markdown('❌ No se pudo obtener respuesta del servidor MCP.');
+            }
+        }
+        catch (error) {
+            console.error('Error en chat participant:', error);
+            stream.markdown(`❌ Error: ${error}`);
+            // Log del error
+            const engine = AutonomousEngine.getInstance();
+            if (engine) {
+                engine.addHistoryEntry({
+                    timestamp: Date.now(),
+                    type: 'error',
+                    description: `Error en chat participant: ${error}`,
+                    success: false,
+                    details: error
+                });
+            }
+        }
+        return { metadata: { command } };
+    }
+    getSystemPrompt(command) {
+        const basePrompt = `Eres Autonomous AI, un asistente inteligente especializado en desarrollo de software. 
+Respondes de manera clara, práctica y útil. Siempre proporcionas ejemplos de código cuando es relevante.`;
+        switch (command) {
+            case 'analyze':
+                return `${basePrompt} Tu tarea es analizar código y proporcionar sugerencias detalladas de mejora, 
+incluyendo mejores prácticas, potenciales problemas y optimizaciones.`;
+            case 'fix':
+                return `${basePrompt} Tu tarea es identificar errores en el código y proporcionar soluciones 
+específicas con código corregido.`;
+            case 'optimize':
+                return `${basePrompt} Tu tarea es optimizar código para mejor rendimiento, legibilidad y 
+mantenibilidad. Proporciona versiones mejoradas del código.`;
+            case 'explain':
+                return `${basePrompt} Tu tarea es explicar cómo funciona el código de manera clara y educativa, 
+incluyendo conceptos y patrones utilizados.`;
+            default:
+                return `${basePrompt} Responde de manera útil y práctica a la consulta del desarrollador.`;
+        }
+    }
+    buildPrompt(command, userPrompt, context) {
+        let prompt = '';
+        if (context) {
+            prompt += `Contexto del workspace:\n${context}\n\n`;
+        }
+        prompt += `Solicitud del usuario: ${userPrompt}`;
+        if (command !== 'general') {
+            prompt += `\n\nComando específico: /${command}`;
+        }
+        return prompt;
+    }
+    async collectWorkspaceContext(command) {
+        let context = '';
+        try {
+            // Obtener archivo activo
+            const activeEditor = vscode.window.activeTextEditor;
+            if (activeEditor) {
+                const document = activeEditor.document;
+                const selection = activeEditor.selection;
+                context += `Archivo activo: ${document.fileName}\n`;
+                context += `Lenguaje: ${document.languageId}\n`;
+                if (!selection.isEmpty) {
+                    const selectedText = document.getText(selection);
+                    context += `Código seleccionado:\n\`\`\`${document.languageId}\n${selectedText}\n\`\`\`\n`;
+                }
+                else if (command === 'analyze' || command === 'fix') {
+                    // Para análisis o fixes, incluir el archivo completo si no hay selección
+                    const fullText = document.getText();
+                    if (fullText.length < 2000) { // Solo archivos pequeños
+                        context += `Contenido completo del archivo:\n\`\`\`${document.languageId}\n${fullText}\n\`\`\`\n`;
+                    }
+                }
+            }
+            // Obtener errores/warnings del archivo actual
+            if (activeEditor) {
+                const diagnostics = vscode.languages.getDiagnostics(activeEditor.document.uri);
+                if (diagnostics.length > 0) {
+                    context += `\nErrores/Warnings detectados:\n`;
+                    diagnostics.slice(0, 5).forEach(diagnostic => {
+                        context += `- Línea ${diagnostic.range.start.line + 1}: ${diagnostic.message}\n`;
+                    });
+                }
+            }
+        }
+        catch (error) {
+            console.log('Error recopilando contexto:', error);
+        }
+        return context;
+    }
+    async callMCPServer(systemPrompt, prompt) {
+        try {
+            const response = await (0, node_fetch_1.default)(SERVER_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: Date.now(),
+                    method: 'mcp.openai.ask',
+                    params: {
+                        question: prompt,
+                        system: systemPrompt,
+                        temperature: 0.7,
+                        maxTokens: 2000
+                    }
+                })
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(data.error.message);
+            }
+            return data.result;
+        }
+        catch (error) {
+            console.error('Error llamando al servidor MCP:', error);
+            throw error;
+        }
+    }
+}
+// ⭐ NUEVO: Auto-interceptor para Copilot
+function setupCopilotAutoInterceptor(context) {
+    const config = vscode.workspace.getConfiguration('autonomousMcpHelper');
+    const autoIntercept = config.get('autoInterceptCopilot', true);
+    if (!autoIntercept) {
+        console.log('🔧 Auto-interceptor deshabilitado por configuración');
+        return;
+    }
+    // Interceptar cuando Copilot esté activo
+    const onDidChangeActiveTextEditor = vscode.window.onDidChangeActiveTextEditor(async (editor) => {
+        if (editor) {
+            // Cuando se abra un archivo, preparar contexto para Copilot
+            await prepareContextForCopilot(editor);
+        }
+    });
+    // Interceptar cuando haya cambios en el documento
+    const onDidChangeTextDocument = vscode.workspace.onDidChangeTextDocument(async (event) => {
+        // Solo si es el archivo activo y han pasado más de 2 segundos desde el último cambio
+        const activeEditor = vscode.window.activeTextEditor;
+        if (activeEditor && event.document === activeEditor.document) {
+            clearTimeout(global.copilotContextTimer);
+            global.copilotContextTimer = setTimeout(async () => {
+                await prepareContextForCopilot(activeEditor);
+            }, 2000);
+        }
+    });
+    context.subscriptions.push(onDidChangeActiveTextEditor, onDidChangeTextDocument);
+    console.log('🤖 Auto-interceptor de Copilot configurado correctamente');
+}
+// Preparar contexto automaticamente para Copilot
+async function prepareContextForCopilot(editor) {
+    try {
+        const document = editor.document;
+        const config = vscode.workspace.getConfiguration('autonomousMcpHelper');
+        // Solo procesar archivos de código
+        if (!['typescript', 'javascript', 'python', 'java', 'go', 'rust', 'cpp', 'c'].includes(document.languageId)) {
+            return;
+        }
+        // Enviar contexto al MCP server de forma silenciosa para que esté listo
+        const code = document.getText();
+        const prompt = `Analiza este código ${document.languageId} y prepara un contexto útil para responder preguntas del usuario:\n\n${code}`;
+        // Llamada silenciosa al MCP server
+        await callMCPServerSilent(prompt, config.get('temperature', 0.3));
+        console.log(`🧠 Contexto preparado para ${document.fileName}`);
+    }
+    catch (error) {
+        console.error('❌ Error preparando contexto:', error);
+    }
+}
+// Llamada silenciosa al MCP server (sin mostrar resultados)
+async function callMCPServerSilent(prompt, temperature = 0.3) {
+    try {
+        const response = await (0, node_fetch_1.default)(SERVER_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: Date.now(),
+                method: 'mcp.openai.ask',
+                params: {
+                    prompt,
+                    temperature,
+                    cache: true // Usar cache para respuestas rápidas
+                }
+            })
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const data = await response.json();
+        return data.result || data;
+    }
+    catch (error) {
+        console.error('❌ Error en llamada silenciosa:', error);
+        return null;
+    }
+}
 function activate(context) {
     console.log('🚀 Autonomous MCP Helper activating...');
     const engine = new AutonomousEngine(context);
     const dashboardProvider = new DashboardProvider(context);
-    // Comandos
+    const historyProvider = new HistoryProvider(context);
+    const settingsProvider = new SettingsProvider(context);
+    // ⭐ NUEVO: Crear y registrar Chat Participant
+    const chatParticipant = new AutonomousAIChatParticipant(context);
+    const participant = vscode.chat.createChatParticipant('autonomousMcpHelper.autonomousai', chatParticipant.handleChatRequest.bind(chatParticipant));
+    // Configurar el icono del chat participant (opcional)
+    participant.iconPath = new vscode.ThemeIcon('robot');
+    console.log('🤖 Chat Participant @autonomousai registrado exitosamente');
+    // ⭐ NUEVO: Registrar Language Model Tools para Agent Mode
+    const languageModelTools = new AutonomousLanguageModelTools(context);
+    // Crear wrappers con la firma correcta para vscode.lm.registerTool
+    const analyzeCodeTool = {
+        invoke: languageModelTools.handleAnalyzeCode.bind(languageModelTools)
+    };
+    const getProjectContextTool = {
+        invoke: languageModelTools.handleGetProjectContext.bind(languageModelTools)
+    };
+    const askOpenAITool = {
+        invoke: languageModelTools.handleAskOpenAI.bind(languageModelTools)
+    };
+    context.subscriptions.push(vscode.lm.registerTool('analyzeCode', analyzeCodeTool), vscode.lm.registerTool('getProjectContext', getProjectContextTool), vscode.lm.registerTool('askOpenAI', askOpenAITool));
+    console.log('🔧 Language Model Tools registradas para Agent Mode');
+    // ⭐ NUEVO: Auto-interceptor de Copilot
+    setupCopilotAutoInterceptor(context);
+    console.log('🚀 Auto-interceptor de Copilot configurado');
+    // Comandos principales
     const manualRunCmd = vscode.commands.registerCommand('autonomousMcpHelper.manualRun', () => {
         console.log('📋 Manual run command executed');
         engine.analyzeProject();
@@ -601,10 +1520,52 @@ function activate(context) {
         console.log('🔄 Toggle engine command executed');
         engine.toggle();
     });
-    // Vista
-    const viewProvider = vscode.window.registerWebviewViewProvider(DashboardProvider.viewId, dashboardProvider);
-    console.log('📊 Dashboard provider registered with ID:', DashboardProvider.viewId);
-    context.subscriptions.push(manualRunCmd, toggleCmd, viewProvider);
+    // Comandos para historial
+    const clearHistoryCmd = vscode.commands.registerCommand('autonomousMcpHelper.clearHistory', () => {
+        console.log('🗑️ Clear history command executed');
+        const state = engine.getState();
+        state.history = [];
+        engine.addHistoryEntry({
+            timestamp: Date.now(),
+            type: 'application',
+            description: 'Historial limpiado manualmente',
+            success: true
+        });
+    });
+    const exportHistoryCmd = vscode.commands.registerCommand('autonomousMcpHelper.exportHistory', async () => {
+        console.log('📤 Export history command executed');
+        const state = engine.getState();
+        const jsonData = JSON.stringify(state.history, null, 2);
+        const document = await vscode.workspace.openTextDocument({
+            content: jsonData,
+            language: 'json'
+        });
+        vscode.window.showTextDocument(document);
+    });
+    // Comando para resetear configuración
+    const resetSettingsCmd = vscode.commands.registerCommand('autonomousMcpHelper.resetSettings', async () => {
+        console.log('🔄 Reset settings command executed');
+        const config = vscode.workspace.getConfiguration('autonomousMcpHelper');
+        const keys = [
+            'enabled', 'openaiApiKey', 'openaiModel', 'maxTokens',
+            'analysisIntervalMs', 'contextLines', 'autoApplySimpleFixes',
+            'showNotifications', 'temperature'
+        ];
+        for (const key of keys) {
+            await config.update(key, undefined, vscode.ConfigurationTarget.Global);
+        }
+        vscode.window.showInformationMessage('🔄 Configuración restablecida a valores por defecto');
+    });
+    // Registrar vistas
+    const dashboardViewProvider = vscode.window.registerWebviewViewProvider(DashboardProvider.viewId, dashboardProvider);
+    const historyViewProvider = vscode.window.registerWebviewViewProvider(HistoryProvider.viewId, historyProvider);
+    const settingsViewProvider = vscode.window.registerWebviewViewProvider(SettingsProvider.viewId, settingsProvider);
+    console.log('📊 View providers registered:');
+    console.log('  - Dashboard:', DashboardProvider.viewId);
+    console.log('  - History:', HistoryProvider.viewId);
+    console.log('  - Settings:', SettingsProvider.viewId);
+    context.subscriptions.push(manualRunCmd, toggleCmd, clearHistoryCmd, exportHistoryCmd, resetSettingsCmd, participant, // ⭐ NUEVO: Chat Participant
+    dashboardViewProvider, historyViewProvider, settingsViewProvider);
     // Auto-start si está habilitado
     const enabled = vscode.workspace.getConfiguration('autonomousMcpHelper').get('enabled', true);
     console.log('⚙️ Auto-start enabled:', enabled);
