@@ -684,6 +684,10 @@ class DashboardProvider implements vscode.WebviewViewProvider {
   </script>
 </body></html>`;
   }
+
+  public updateContent() {
+    this.render();
+  }
 }
 
 // History Provider para la vista de historial
@@ -719,7 +723,7 @@ class HistoryProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private updateContent() {
+  public updateContent() {
     if (!this._view) return;
 
     const engine = AutonomousEngine.getInstance();
@@ -916,7 +920,7 @@ class SettingsProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private updateContent() {
+  public updateContent() {
     if (!this._view) return;
     this._view.webview.html = this.getSettingsHtml();
   }
@@ -2030,14 +2034,25 @@ ${code}
   });
 
   // Registrar vistas
+  console.log('📊 Registrando view providers...');
+  console.log('  - Dashboard viewId:', DashboardProvider.viewId);
+  console.log('  - History viewId:', HistoryProvider.viewId);
+  console.log('  - Settings viewId:', SettingsProvider.viewId);
+
   const dashboardViewProvider = vscode.window.registerWebviewViewProvider(DashboardProvider.viewId, dashboardProvider);
   const historyViewProvider = vscode.window.registerWebviewViewProvider(HistoryProvider.viewId, historyProvider);
   const settingsViewProvider = vscode.window.registerWebviewViewProvider(SettingsProvider.viewId, settingsProvider);
 
-  console.log('📊 View providers registered:');
-  console.log('  - Dashboard:', DashboardProvider.viewId);
-  console.log('  - History:', HistoryProvider.viewId);
-  console.log('  - Settings:', SettingsProvider.viewId);
+  console.log('📊 View providers registered successfully:');
+  console.log('  - Dashboard:', DashboardProvider.viewId, dashboardViewProvider ? '✅' : '❌');
+  console.log('  - History:', HistoryProvider.viewId, historyViewProvider ? '✅' : '❌');
+  console.log('  - Settings:', SettingsProvider.viewId, settingsViewProvider ? '✅' : '❌');
+
+  // Verificar que las instancias se crearon correctamente
+  console.log('🔧 Provider instances:');
+  console.log('  - DashboardProvider:', dashboardProvider ? '✅' : '❌');
+  console.log('  - HistoryProvider:', historyProvider ? '✅' : '❌');
+  console.log('  - SettingsProvider:', settingsProvider ? '✅' : '❌');
 
   context.subscriptions.push(
     manualRunCmd,
@@ -2062,6 +2077,14 @@ ${code}
     setTimeout(() => {
       console.log('🎯 Starting autonomous engine...');
       engine.start();
+      
+      // Forzar actualización de vistas después de un momento
+      setTimeout(() => {
+        console.log('🔄 Actualizando vistas después del inicio...');
+        historyProvider.updateContent?.();
+        dashboardProvider.updateContent?.();
+        settingsProvider.updateContent?.();
+      }, 2000);
     }, 1000);
   }
 
