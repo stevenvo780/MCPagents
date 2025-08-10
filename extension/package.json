@@ -36,7 +36,10 @@
     "menus": {
       "view/title": [
         { "command": "autonomousMcpHelper.manualRun", "when": "view == autonomousMcpDashboard", "group": "navigation@1" },
-        { "command": "autonomousMcpHelper.toggleEngine", "when": "view == autonomousMcpDashboard", "group": "navigation@2" }
+        { "command": "autonomousMcpHelper.toggleEngine", "when": "view == autonomousMcpDashboard", "group": "navigation@2" },
+        { "command": "autonomousMcpHelper.clearHistory", "when": "view == autonomousMcpHistory", "group": "navigation@1" },
+        { "command": "autonomousMcpHelper.exportHistory", "when": "view == autonomousMcpHistory", "group": "navigation@2" },
+        { "command": "autonomousMcpHelper.resetSettings", "when": "view == autonomousMcpSettings", "group": "navigation@1" }
       ]
     },
     "configuration": {

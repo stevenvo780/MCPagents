@@ -11,6 +11,7 @@ interface ProjectState {
   suggestionsApplied: number;
   errorsFixed: number;
   currentSuggestions: Suggestion[];
+  history: HistoryEntry[];
 }
 
 interface Suggestion {
@@ -23,6 +24,15 @@ interface Suggestion {
   priority: number;
   timestamp: number;
   applied?: boolean;
+}
+
+interface HistoryEntry {
+  timestamp: number;
+  type: 'suggestion' | 'analysis' | 'application' | 'error';
+  description: string;
+  file?: string;
+  success?: boolean;
+  details?: any;
 }
 
 class AutonomousEngine {
@@ -245,7 +255,8 @@ Prioriza correcciones de errores, mejoras de rendimiento, y tests faltantes.
       sessionsCount: 0,
       suggestionsApplied: 0,
       errorsFixed: 0,
-      currentSuggestions: []
+      currentSuggestions: [],
+      history: []
     });
   }
 
