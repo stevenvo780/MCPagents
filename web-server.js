@@ -337,6 +337,12 @@ app.post('/jsonrpc', async (req, res) => {
       });
     }
 
+    // Handle notifications (no response expected)
+    if (method && method.startsWith('notifications/')) {
+      console.log(`Received notification: ${method}`);
+      return res.status(200).end();
+    }
+
     let result;
     
     switch (method) {
@@ -358,6 +364,10 @@ app.post('/jsonrpc', async (req, res) => {
         result = {
           tools: mcpTools
         };
+        break;
+      }
+      case 'ping': {
+        result = {};
         break;
       }
       case 'tools/call': {
