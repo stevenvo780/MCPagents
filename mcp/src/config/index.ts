@@ -1,7 +1,17 @@
 import dotenv from 'dotenv';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 
-dotenv.config(); // Load environment variables from .env file
+// Intento primario: .env en cwd (mcp/)
+const primary = dotenv.config();
+// Fallback: buscar .env en el directorio padre del monorepo si no se cargó OPENAI_API_KEY
+if (!process.env.OPENAI_API_KEY) {
+  const candidate = path.resolve(__dirname, '../../../.env');
+  if (fs.existsSync(candidate)) {
+    dotenv.config({ path: candidate });
+  }
+}
 
 interface AppConfig {
   port: number;

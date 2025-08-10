@@ -2,7 +2,7 @@
   "name": "autonomous-mcp-helper",
   "displayName": "Autonomous MCP Helper",
   "description": "Extensión que invoca automáticamente el servidor MCP para generar pasos siguientes y aplicar sugerencias.",
-  "version": "0.0.2",
+  "version": "0.0.4",
   "publisher": "local",
   "repository": { "type": "git", "url": "https://example.com/your/repo.git" },
   "license": "MIT",
@@ -16,26 +16,40 @@
   "main": "out/extension.js",
   "contributes": {
     "commands": [
+      { "command": "autonomousMcpHelper.runAutopilot", "title": "Autonomous MCP: Run Autopilot" },
+      { "command": "autonomousMcpHelper.toggleAutoLoop", "title": "Autonomous MCP: Toggle Auto Loop" },
+      { "command": "autonomousMcpHelper.showControl", "title": "Autonomous MCP: Show Control Panel" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "autonomousMcp", "title": "Auto MCP", "icon": "resources/icon.svg" }
+      ]
+    },
+    "views": {
+      "autonomousMcp": [
+        { "id": "autonomousMcpControl", "name": "Control", "icon": "resources/icon.svg" }
+      ]
+    },
+    "viewsWelcome": [
       {
-        "command": "autonomousMcpHelper.runAutopilot",
-        "title": "Autonomous MCP: Run Autopilot"
-      },
-      {
-        "command": "autonomousMcpHelper.toggleAutoLoop",
-        "title": "Autonomous MCP: Toggle Auto Loop"
-      },
-      {
-        "command": "autonomousMcpHelper.showControl",
-        "title": "Autonomous MCP: Show Control Panel"
+        "view": "autonomousMcpControl",
+        "contents": "# Autonomous MCP\nUsa los botones de la barra o comandos: Run Autopilot / Toggle Auto Loop.\n[Mostrar Panel](command:autonomousMcpHelper.showControl)"
       }
     ],
+    "menus": {
+      "view/title": [
+        { "command": "autonomousMcpHelper.runAutopilot", "when": "view == autonomousMcpControl", "group": "navigation@1" },
+        { "command": "autonomousMcpHelper.toggleAutoLoop", "when": "view == autonomousMcpControl", "group": "navigation@2" },
+        { "command": "autonomousMcpHelper.showControl", "when": "view == autonomousMcpControl", "group": "navigation@3" }
+      ]
+    },
     "configuration": {
       "title": "Autonomous MCP Helper",
       "properties": {
         "autonomousMcpHelper.autoLoopIntervalMs": {
           "type": "number",
-            "default": 180000,
-            "description": "Intervalo (ms) entre ejecuciones automáticas del autopilot."
+          "default": 180000,
+          "description": "Intervalo (ms) entre ejecuciones automáticas del autopilot."
         },
         "autonomousMcpHelper.contextMaxLines": {
           "type": "number",
