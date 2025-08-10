@@ -1508,6 +1508,80 @@ function activate(context) {
     };
     context.subscriptions.push(vscode.lm.registerTool('analyzeCode', analyzeCodeTool), vscode.lm.registerTool('getProjectContext', getProjectContextTool), vscode.lm.registerTool('askOpenAI', askOpenAITool));
     console.log('🔧 Language Model Tools registradas para Agent Mode');
+    // ⭐ NUEVO: Registrar herramientas MCP nativas para acceso como mcp_autonomous_*
+    const mcpAutonomousAsk = {
+        invoke: async (options, token) => {
+            try {
+                const { question, prompt, system, temperature, maxTokens, context: userContext } = options.input;
+                const response = await languageModelTools.callMCPServer(system || 'Eres un asistente experto en programación.', question || prompt, temperature || 0.3);
+                return new vscode.LanguageModelToolResult([
+                    new vscode.LanguageModelTextPart(response.answer || 'Sin respuesta')
+                ]);
+            }
+            catch (error) {
+                return new vscode.LanguageModelToolResult([
+                    new vscode.LanguageModelTextPart(`Error: ${error}`)
+                ]);
+            }
+        }
+    };
+    const mcpAutonomousHealth = {
+        invoke: async (options, token) => {
+            try {
+                const response = await languageModelTools.callMCPServer('Eres un monitor de sistema.', 'health check', 0.1);
+                return new vscode.LanguageModelToolResult([
+                    new vscode.LanguageModelTextPart(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }))
+                ]);
+            }
+            catch (error) {
+                return new vscode.LanguageModelToolResult([
+                    new vscode.LanguageModelTextPart(JSON.stringify({ status: 'error', message: error.message }))
+                ]);
+            }
+        }
+    };
+    const mcpAutonomousAnalyzeCode = {
+        invoke: async (options, token) => {
+            try {
+                const { code, language = 'typescript', task = 'analyze' } = options.input;
+                if (!code) {
+                    throw new Error('Parámetro "code" es requerido');
+                }
+                const systemPrompt = `Eres un experto en ${language} que analiza código y proporciona sugerencias específicas y prácticas.
+
+Tarea: ${task}
+
+INSTRUCCIONES:
+- Proporciona análisis detallado y específico
+- Sugiere mejoras concretas con ejemplos de código
+- Identifica patrones, problemas potenciales y optimizaciones
+- Sé conciso pero completo
+- Formatea la respuesta en Markdown`;
+                const prompt = `Analiza este código ${language} y ${task === 'fix' ? 'encuentra errores y sugiere correcciones' :
+                    task === 'optimize' ? 'sugiere optimizaciones' :
+                        task === 'explain' ? 'explica cómo funciona' : 'proporciona sugerencias de mejora'}:
+
+\`\`\`${language}
+${code}
+\`\`\``;
+                const response = await languageModelTools.callMCPServer(systemPrompt, prompt, 0.2);
+                return new vscode.LanguageModelToolResult([
+                    new vscode.LanguageModelTextPart(response.answer || 'No se pudo analizar el código')
+                ]);
+            }
+            catch (error) {
+                return new vscode.LanguageModelToolResult([
+                    new vscode.LanguageModelTextPart(`Error: ${error}`)
+                ]);
+            }
+        }
+    };
+    // Registrar herramientas MCP como herramientas nativas
+    context.subscriptions.push(vscode.lm.registerTool('mcp_autonomous_ask', mcpAutonomousAsk), vscode.lm.registerTool('mcp_autonomous_health', mcpAutonomousHealth), vscode.lm.registerTool('mcp_autonomous_analyze_code', mcpAutonomousAnalyzeCode));
+    console.log('🚀 Herramientas MCP Autonomous registradas como nativas:');
+    console.log('  - mcp_autonomous_ask');
+    console.log('  - mcp_autonomous_health');
+    console.log('  - mcp_autonomous_analyze_code');
     // ⭐ NUEVO: Auto-interceptor de Copilot
     setupCopilotAutoInterceptor(context);
     console.log('🚀 Auto-interceptor de Copilot configurado');
@@ -1556,6 +1630,132 @@ function activate(context) {
         }
         vscode.window.showInformationMessage('🔄 Configuración restablecida a valores por defecto');
     });
+    // ⭐ NUEVO: Comandos MCP directos para acceso inmediato
+    const mcpAskCmd = vscode.commands.registerCommand('autonomousMcpHelper.mcpAsk', async () => {
+        const question = await vscode.window.showInputBox({
+            prompt: '¿Qué quieres preguntarle al MCP Autonomous?',
+            placeHolder: 'Ejemplo: ¿Cómo optimizar este código React?'
+        });
+        if (question) {
+            try {
+                const response = await languageModelTools.callMCPServer('Eres un experto en desarrollo de software. Responde de manera práctica y con ejemplos.', question, 0.3);
+                // Mostrar respuesta en un nuevo documento
+                const doc = await vscode.workspace.openTextDocument({
+                    content: `# MCP Autonomous Response\n\n**Pregunta:** ${question}\n\n**Respuesta:**\n\n${response.answer}`,
+                    language: 'markdown'
+                });
+                vscode.window.showTextDocument(doc);
+                vscode.window.showInformationMessage('✅ Respuesta generada exitosamente');
+            }
+            catch (error) {
+                vscode.window.showErrorMessage(`❌ Error: ${error}`);
+            }
+        }
+    });
+    const mcpAnalyzeCodeCmd = vscode.commands.registerCommand('autonomousMcpHelper.mcpAnalyzeCode', async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('⚠️ Abre un archivo para analizar');
+            return;
+        }
+        const document = editor.document;
+        const selection = editor.selection;
+        const code = selection.isEmpty ? document.getText() : document.getText(selection);
+        if (!code.trim()) {
+            vscode.window.showWarningMessage('⚠️ No hay código para analizar');
+            return;
+        }
+        try {
+            vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: '🔍 Analizando código...',
+                cancellable: false
+            }, async (progress) => {
+                const systemPrompt = `Eres un experto en ${document.languageId} que analiza código y proporciona sugerencias específicas.
+
+INSTRUCCIONES:
+- Analiza el código en detalle
+- Identifica problemas, optimizaciones y mejores prácticas
+- Proporciona ejemplos de código mejorado
+- Formatea la respuesta en Markdown`;
+                const prompt = `Analiza este código ${document.languageId} y proporciona sugerencias detalladas:
+
+\`\`\`${document.languageId}
+${code}
+\`\`\``;
+                const response = await languageModelTools.callMCPServer(systemPrompt, prompt, 0.2);
+                // Mostrar análisis en un nuevo documento
+                const doc = await vscode.workspace.openTextDocument({
+                    content: `# Análisis de Código - ${document.fileName}\n\n**Archivo:** ${document.fileName}\n**Lenguaje:** ${document.languageId}\n\n## Código Analizado\n\n\`\`\`${document.languageId}\n${code}\n\`\`\`\n\n## Análisis\n\n${response.answer}`,
+                    language: 'markdown'
+                });
+                vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
+                vscode.window.showInformationMessage('✅ Análisis completado');
+            });
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`❌ Error analizando código: ${error}`);
+        }
+    });
+    const mcpHealthCmd = vscode.commands.registerCommand('autonomousMcpHelper.mcpHealth', async () => {
+        try {
+            const response = await (0, node_fetch_1.default)('http://localhost:7088/health');
+            const data = await response.json();
+            if (data.status === 'ok') {
+                vscode.window.showInformationMessage(`✅ MCP Server funcionando correctamente - ${data.timestamp}`);
+            }
+            else {
+                vscode.window.showWarningMessage('⚠️ MCP Server responde pero hay problemas');
+            }
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`❌ MCP Server no disponible: ${error}`);
+        }
+    });
+    const mcpContextCmd = vscode.commands.registerCommand('autonomousMcpHelper.mcpContext', async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('⚠️ Abre un archivo para obtener contexto');
+            return;
+        }
+        try {
+            vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: '📋 Generando contexto del proyecto...',
+                cancellable: false
+            }, async (progress) => {
+                const document = editor.document;
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                const diagnostics = vscode.languages.getDiagnostics(document.uri);
+                let context = `# Contexto del Proyecto\n\n`;
+                context += `**Archivo activo:** ${document.fileName}\n`;
+                context += `**Lenguaje:** ${document.languageId}\n`;
+                context += `**Workspace:** ${workspaceFolders?.[0]?.name || 'N/A'}\n\n`;
+                if (diagnostics.length > 0) {
+                    context += `## Errores/Warnings (${diagnostics.length})\n\n`;
+                    diagnostics.slice(0, 10).forEach((diagnostic, index) => {
+                        context += `${index + 1}. **Línea ${diagnostic.range.start.line + 1}:** ${diagnostic.message}\n`;
+                    });
+                    context += '\n';
+                }
+                // Obtener archivos del proyecto
+                const files = await vscode.workspace.findFiles('**/*.{js,ts,py,java,cpp,c,cs,json}', '**/node_modules/**', 20);
+                context += `## Archivos del proyecto (${files.length})\n\n`;
+                files.slice(0, 15).forEach(file => {
+                    context += `- ${vscode.workspace.asRelativePath(file)}\n`;
+                });
+                const doc = await vscode.workspace.openTextDocument({
+                    content: context,
+                    language: 'markdown'
+                });
+                vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
+                vscode.window.showInformationMessage('✅ Contexto generado exitosamente');
+            });
+        }
+        catch (error) {
+            vscode.window.showErrorMessage(`❌ Error generando contexto: ${error}`);
+        }
+    });
     // Registrar vistas
     const dashboardViewProvider = vscode.window.registerWebviewViewProvider(DashboardProvider.viewId, dashboardProvider);
     const historyViewProvider = vscode.window.registerWebviewViewProvider(HistoryProvider.viewId, historyProvider);
@@ -1564,7 +1764,7 @@ function activate(context) {
     console.log('  - Dashboard:', DashboardProvider.viewId);
     console.log('  - History:', HistoryProvider.viewId);
     console.log('  - Settings:', SettingsProvider.viewId);
-    context.subscriptions.push(manualRunCmd, toggleCmd, clearHistoryCmd, exportHistoryCmd, resetSettingsCmd, participant, // ⭐ NUEVO: Chat Participant
+    context.subscriptions.push(manualRunCmd, toggleCmd, clearHistoryCmd, exportHistoryCmd, resetSettingsCmd, mcpAskCmd, mcpAnalyzeCodeCmd, mcpHealthCmd, mcpContextCmd, participant, // ⭐ NUEVO: Chat Participant
     dashboardViewProvider, historyViewProvider, settingsViewProvider);
     // Auto-start si está habilitado
     const enabled = vscode.workspace.getConfiguration('autonomousMcpHelper').get('enabled', true);

@@ -169,6 +169,26 @@
         "command": "autonomousMcpHelper.resetSettings",
         "title": "Autonomous MCP: Reset Settings",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "autonomousMcpHelper.mcpAsk",
+        "title": "MCP: Ask Question",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "autonomousMcpHelper.mcpAnalyzeCode",
+        "title": "MCP: Analyze Code",
+        "icon": "$(search)"
+      },
+      {
+        "command": "autonomousMcpHelper.mcpHealth",
+        "title": "MCP: Health Check",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "autonomousMcpHelper.mcpContext",
+        "title": "MCP: Get Project Context",
+        "icon": "$(info)"
       }
     ],
     "viewsContainers": {
