@@ -1,0 +1,63 @@
+{
+  "name": "autonomous-mcp-helper",
+  "displayName": "Autonomous MCP Helper",
+  "description": "Extensión que invoca automáticamente el servidor MCP para generar pasos siguientes y aplicar sugerencias.",
+  "version": "0.0.2",
+  "publisher": "local",
+  "repository": { "type": "git", "url": "https://example.com/your/repo.git" },
+  "license": "MIT",
+  "categories": ["Other"],
+  "keywords": ["mcp", "autonomous", "openai", "assistant"],
+  "engines": { "vscode": ">=1.85.0" },
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:autonomousMcpHelper.runAutopilot"
+  ],
+  "main": "out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "autonomousMcpHelper.runAutopilot",
+        "title": "Autonomous MCP: Run Autopilot"
+      },
+      {
+        "command": "autonomousMcpHelper.toggleAutoLoop",
+        "title": "Autonomous MCP: Toggle Auto Loop"
+      },
+      {
+        "command": "autonomousMcpHelper.showControl",
+        "title": "Autonomous MCP: Show Control Panel"
+      }
+    ],
+    "configuration": {
+      "title": "Autonomous MCP Helper",
+      "properties": {
+        "autonomousMcpHelper.autoLoopIntervalMs": {
+          "type": "number",
+            "default": 180000,
+            "description": "Intervalo (ms) entre ejecuciones automáticas del autopilot."
+        },
+        "autonomousMcpHelper.contextMaxLines": {
+          "type": "number",
+          "default": 400,
+          "description": "Máximo de líneas de contexto enviadas al MCP."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.9.2",
+    "vsce": "^2.15.0"
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  }
+}

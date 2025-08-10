@@ -34,6 +34,17 @@ app.get('/health', async (_req: Request, res: Response) => {
   try { res.json(await health({})); } catch (e: any) { res.status(500).json({ status: 'error', message: e.message }); }
 });
 
+app.get('/', (_req: Request, res: Response) => {
+  res.json({
+    name: 'mcp-openai-minimal',
+    status: 'ok',
+    jsonrpc: '2.0',
+    endpoint: '/jsonrpc',
+    health: '/health',
+    tools: Object.keys(mcpMethods),
+  });
+});
+
 app.post('/jsonrpc', async (req: Request, res: Response) => {
   const body = req.body;
   if (Array.isArray(body)) {
@@ -62,10 +73,7 @@ function describeServer() {
   return {
     name: 'mcp-openai-minimal',
     version: '2.0.0',
-    tools: Object.entries(mcpMethods).map(([name, def]) => ({
-      name,
-      description: def.meta?.description || '',
-    })),
+    tools: Object.entries(mcpMethods).map(([name, def]) => ({ name, description: def.meta?.description || '' })),
   };
 }
 
