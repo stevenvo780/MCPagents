@@ -1,11 +1,14 @@
 {
   "name": "mcp-server-ts",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "build": "tsc",
     "start": "ts-node src/mcp/server.ts",
+    "start:stdio": "ts-node src/mcp/stdio-server.ts",
     "dev": "ts-node --transpile-only src/mcp/server.ts",
+    "dev:stdio": "ts-node --transpile-only src/mcp/stdio-server.ts",
     "test": "echo \"No tests\" && exit 0"
   },
   "keywords": [],
@@ -13,6 +16,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.2",
     "@types/express": "^5.0.3",
     "@types/node-fetch": "^2.6.13",
     "@types/uuid": "^10.0.0",
