@@ -1,5 +1,14 @@
 {
-  "dependencies": {
-    "node-fetch": "^3.3.2"
-  }
+  "name": "mcp-autonomous-minimal",
+  "version": "1.0.0",
+  "description": "MCP Autonomous Server - Versión minimal",
+  "type": "module",
+  "main": "mcp/stdio-server-fixed.js",
+  "scripts": {
+    "start": "node mcp/stdio-server-fixed.js",
+    "test": "echo 'No tests configured' && exit 0"
+  },
+  "keywords": ["mcp", "autonomous", "copilot", "openai"],
+  "author": "",
+  "license": "ISC"
 }
