@@ -125,7 +125,141 @@ async function getProjectContext() {
   }
 }
 
-// Función de OpenAI reutilizada desde el servidor MCP original
+// Función inteligente que detecta el tipo de modelo y ajusta parámetros automáticamente
+// Soporte completo para TODOS los modelos importantes de OpenAI
+function getModelParams(modelName, temperature, maxTokens) {
+  const model = modelName.toLowerCase();
+  
+  // GPT-5 (Reasoning model - Flagship)
+  if (model.includes('gpt-5')) {
+    return {
+      tokenParam: 'max_completion_tokens',
+      tokenValue: Math.max(1000, Math.min(maxTokens, 8000)),
+      supportsTemperature: false,
+      maxLimit: 8000,
+      minTokens: 1000,
+      family: 'gpt-5',
+      description: 'GPT-5 Reasoning Model'
+    };
+  }
+  
+  // O1-Preview (Advanced Reasoning)
+  if (model.includes('o1-preview')) {
+    return {
+      tokenParam: 'max_completion_tokens',
+      tokenValue: Math.max(1000, Math.min(maxTokens, 32768)),
+      supportsTemperature: false,
+      maxLimit: 32768,
+      minTokens: 1000,
+      family: 'o1-preview',
+      description: 'O1-Preview Advanced Reasoning'
+    };
+  }
+  
+  // O1-Mini (Efficient Reasoning)
+  if (model.includes('o1-mini') || (model.includes('o1') && !model.includes('preview'))) {
+    return {
+      tokenParam: 'max_completion_tokens',
+      tokenValue: Math.max(1000, Math.min(maxTokens, 65536)),
+      supportsTemperature: false,
+      maxLimit: 65536,
+      minTokens: 1000,
+      family: 'o1-mini',
+      description: 'O1-Mini Efficient Reasoning'
+    };
+  }
+  
+  // GPT-4o-Mini (Most Economical)
+  if (model.includes('gpt-4o-mini')) {
+    return {
+      tokenParam: 'max_tokens',
+      tokenValue: Math.min(maxTokens, 16384),
+      supportsTemperature: true,
+      maxLimit: 16384,
+      minTokens: 1,
+      family: 'gpt-4o-mini',
+      description: 'GPT-4o-Mini Economical'
+    };
+  }
+  
+  // GPT-4o (Flagship Multimodal)
+  if (model.includes('gpt-4o')) {
+    return {
+      tokenParam: 'max_tokens',
+      tokenValue: Math.min(maxTokens, 16384),
+      supportsTemperature: true,
+      maxLimit: 16384,
+      minTokens: 1,
+      family: 'gpt-4o',
+      description: 'GPT-4o Flagship Multimodal'
+    };
+  }
+  
+  // GPT-4-Turbo (Fast GPT-4)
+  if (model.includes('gpt-4-turbo')) {
+    return {
+      tokenParam: 'max_tokens',
+      tokenValue: Math.min(maxTokens, 4096),
+      supportsTemperature: true,
+      maxLimit: 4096,
+      minTokens: 1,
+      family: 'gpt-4-turbo',
+      description: 'GPT-4-Turbo Fast'
+    };
+  }
+  
+  // GPT-4 (Standard)
+  if (model.includes('gpt-4')) {
+    return {
+      tokenParam: 'max_tokens',
+      tokenValue: Math.min(maxTokens, 8192),
+      supportsTemperature: true,
+      maxLimit: 8192,
+      minTokens: 1,
+      family: 'gpt-4',
+      description: 'GPT-4 Standard'
+    };
+  }
+  
+  // GPT-3.5-Turbo-Instruct (Legacy Completion)
+  if (model.includes('gpt-3.5-turbo-instruct')) {
+    return {
+      tokenParam: 'max_tokens',
+      tokenValue: Math.min(maxTokens, 4096),
+      supportsTemperature: true,
+      maxLimit: 4096,
+      minTokens: 1,
+      family: 'gpt-3.5-instruct',
+      description: 'GPT-3.5-Turbo-Instruct Legacy'
+    };
+  }
+  
+  // GPT-3.5-Turbo (Legacy Chat)
+  if (model.includes('gpt-3.5')) {
+    return {
+      tokenParam: 'max_tokens',
+      tokenValue: Math.min(maxTokens, 4096),
+      supportsTemperature: true,
+      maxLimit: 4096,
+      minTokens: 1,
+      family: 'gpt-3.5',
+      description: 'GPT-3.5-Turbo Legacy'
+    };
+  }
+  
+  // Fallback para modelos desconocidos o futuros
+  return {
+    tokenParam: 'max_tokens',
+    tokenValue: Math.min(maxTokens, 4096),
+    supportsTemperature: true,
+    maxLimit: 4096,
+    minTokens: 1,
+    family: 'unknown',
+    description: 'Unknown Model (using safe defaults)'
+  };
+}
+
+// Función de OpenAI mejorada que funciona con TODOS los modelos
 async function openaiAsk({ prompt, system, temperature = 0.7, maxTokens = 2000, context }) {
   const apiKey = process.env.OPENAI_API_KEY;
 
@@ -138,10 +272,34 @@ async function openaiAsk({ prompt, system, temperature = 0.7, maxTokens = 2000, 
     try {
       const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com';
       const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+      
+      // Detectar automáticamente los parámetros del modelo
+      const modelParams = getModelParams(model, temperature, maxTokens);
+      
       const messages = [];
       if (system) messages.push({ role: 'system', content: system });
       if (context) messages.push({ role: 'system', content: `Contexto:\n${context}` });
       messages.push({ role: 'user', content: prompt });
+      
+      // Construir el body dinámicamente según el modelo
+      const requestBody = {
+        model,
+        messages,
+        [modelParams.tokenParam]: modelParams.tokenValue
+      };
+      
+      // Solo añadir temperature si el modelo la soporta
+      if (modelParams.supportsTemperature) {
+        requestBody.temperature = temperature;
+      }
+      
+      console.log(`🤖 Modelo: ${model} (${modelParams.description})`);
+      console.log(`📊 Parámetros:`, {
+        tokenParam: `${modelParams.tokenParam}: ${modelParams.tokenValue}`,
+        maxLimit: modelParams.maxLimit,
+        temperature: modelParams.supportsTemperature ? temperature : 'no soportado',
+        family: modelParams.family
+      });
       
       const response = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
@@ -149,20 +307,21 @@ async function openaiAsk({ prompt, system, temperature = 0.7, maxTokens = 2000, 
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature,
-          max_tokens: maxTokens,
-        }),
+        body: JSON.stringify(requestBody),
       });
       
-      if (!response.ok) throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`❌ Error API ${response.status}:`, errorText);
+        throw new Error(`OpenAI API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+      
       const data = await response.json();
       return {
         answer: data.choices?.[0]?.message?.content || '',
-        model,
+        model: data.model || model,
         usage: data.usage,
+        modelParams: modelParams
       };
     } catch (error) {
       console.error('Error con OpenAI:', error.message);
@@ -194,8 +353,10 @@ app.get('/', (req, res) => {
       health: '/health',
       ask: '/api/ask',
       analyze: '/api/analyze',
+      models: '/api/models',
       jsonrpc: '/jsonrpc'
-    }
+    },
+    currentModel: process.env.OPENAI_MODEL || 'gpt-4o-mini'
   });
 });
 
@@ -260,6 +421,111 @@ app.post('/api/analyze', async (req, res) => {
       error: error.message
     });
   }
+});
+
+// Endpoint para listar todos los modelos soportados
+app.get('/api/models', (req, res) => {
+  const supportedModels = [
+    {
+      name: 'gpt-5',
+      family: 'gpt-5',
+      description: 'GPT-5 Reasoning Model - Flagship reasoning capabilities',
+      tokenParam: 'max_completion_tokens',
+      maxTokens: 8000,
+      minTokens: 1000,
+      supportsTemperature: false,
+      recommended: 'Para tareas que requieren razonamiento complejo'
+    },
+    {
+      name: 'o1-preview',
+      family: 'o1-preview', 
+      description: 'O1-Preview Advanced Reasoning - Máximo razonamiento',
+      tokenParam: 'max_completion_tokens',
+      maxTokens: 32768,
+      minTokens: 1000,
+      supportsTemperature: false,
+      recommended: 'Para problemas extremadamente complejos'
+    },
+    {
+      name: 'o1-mini',
+      family: 'o1-mini',
+      description: 'O1-Mini Efficient Reasoning - Razonamiento eficiente',
+      tokenParam: 'max_completion_tokens', 
+      maxTokens: 65536,
+      minTokens: 1000,
+      supportsTemperature: false,
+      recommended: 'Para razonamiento rápido y económico'
+    },
+    {
+      name: 'gpt-4o',
+      family: 'gpt-4o',
+      description: 'GPT-4o Flagship Multimodal - Más rápido y potente',
+      tokenParam: 'max_tokens',
+      maxTokens: 16384,
+      minTokens: 1,
+      supportsTemperature: true,
+      recommended: 'Para uso general de alta calidad'
+    },
+    {
+      name: 'gpt-4o-mini',
+      family: 'gpt-4o-mini', 
+      description: 'GPT-4o-Mini Economical - Más económico',
+      tokenParam: 'max_tokens',
+      maxTokens: 16384,
+      minTokens: 1,
+      supportsTemperature: true,
+      recommended: 'Para uso general económico'
+    },
+    {
+      name: 'gpt-4-turbo',
+      family: 'gpt-4-turbo',
+      description: 'GPT-4-Turbo Fast - GPT-4 optimizado',
+      tokenParam: 'max_tokens',
+      maxTokens: 4096,
+      minTokens: 1,
+      supportsTemperature: true,
+      recommended: 'Para GPT-4 más rápido'
+    },
+    {
+      name: 'gpt-4',
+      family: 'gpt-4',
+      description: 'GPT-4 Standard - Modelo clásico potente',
+      tokenParam: 'max_tokens',
+      maxTokens: 8192,
+      minTokens: 1,
+      supportsTemperature: true,
+      recommended: 'Para tareas que requieren máxima calidad'
+    },
+    {
+      name: 'gpt-3.5-turbo',
+      family: 'gpt-3.5',
+      description: 'GPT-3.5-Turbo Legacy - Rápido y económico',
+      tokenParam: 'max_tokens',
+      maxTokens: 4096,
+      minTokens: 1,
+      supportsTemperature: true,
+      recommended: 'Para tareas simples y rápidas'
+    }
+  ];
+
+  const currentModel = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const currentModelParams = getModelParams(currentModel, 0.7, 2000);
+
+  res.json({
+    success: true,
+    data: {
+      currentModel: {
+        name: currentModel,
+        params: currentModelParams
+      },
+      supportedModels: supportedModels,
+      howToChange: {
+        step1: 'Editar .env: OPENAI_MODEL=nombre_del_modelo',
+        step2: 'Reiniciar servidor: npm start',
+        step3: 'Probar: curl -X POST http://localhost:8080/api/ask -H "Content-Type: application/json" -d \'{"question":"test"}\''
+      }
+    }
+  });
 });
 
 // Definición de herramientas MCP disponibles
