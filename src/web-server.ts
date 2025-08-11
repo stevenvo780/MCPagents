@@ -24,6 +24,8 @@ app.post('/jsonrpc', async (req, res): Promise<void> => {
   try {
     const { method, params, id, jsonrpc } = req.body;
     
+    console.log(`[MCP] Received method: ${method}`, params ? `with params: ${JSON.stringify(params)}` : 'without params');
+    
     // Validate JSON-RPC format
     if (jsonrpc !== '2.0' || !method) {
       res.status(400).json({
@@ -45,6 +47,15 @@ app.post('/jsonrpc', async (req, res): Promise<void> => {
         };
         break;
 
+      case 'initialized':
+        // Notification method, no response needed
+        res.status(200).send();
+        return;
+
+      case 'ping':
+        result = {};
+        break;
+
       case 'tools/list':
         const tools = await mcpServer.listTools();
         result = tools;
@@ -62,10 +73,31 @@ app.post('/jsonrpc', async (req, res): Promise<void> => {
         result = await mcpServer.handleToolCall(params.name, params.arguments || {});
         break;
 
+      case 'notifications/initialized':
+        // Notification method, no response needed
+        res.status(200).send();
+        return;
+
+      case 'completion/complete':
+        // Return empty completions for now
+        result = { completion: { values: [] } };
+        break;
+
+      case 'resources/list':
+        // Return empty resources for now
+        result = { resources: [] };
+        break;
+
+      case 'prompts/list':
+        // Return empty prompts for now
+        result = { prompts: [] };
+        break;
+
       default:
+        console.log(`[MCP] Unknown method: ${method}`);
         res.status(400).json({
           jsonrpc: '2.0',
-          error: { code: -32601, message: 'Method not found' },
+          error: { code: -32601, message: `Method not found: ${method}` },
           id
         });
         return;
