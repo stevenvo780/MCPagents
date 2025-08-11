@@ -9,7 +9,7 @@
     "start:mcp": "node autocopilot-server.js",
     "start:stdio": "ts-node src/mcp/stdio-server.ts",
     "dev": "ts-node --transpile-only src/mcp/server.ts",
-    "dev:stdio": "ts-node --transpile-only src/mcp/stdio-server.ts",
+    "dev:stdio": "node --loader ts-node/esm src/mcp/stdio-server.ts",
     "dev:web": "node --watch web-server.js",
     "test": "echo \"No tests\" && exit 0"
   },
@@ -32,7 +32,9 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@types/node": "^18.0.0",
     "ts-node": "^10.9.2",
+    "tsx": "^4.7.0",
     "typescript": "^5.9.2"
   }
 }
