@@ -137,7 +137,7 @@ async function openaiAsk({ prompt, system, temperature = 0.7, maxTokens = 2000, 
   if (apiKey) {
     try {
       const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com';
-      const model = process.env.OPENAI_MODEL || 'gpt-5-2025-08-07';
+      const model = process.env.OPENAI_MODEL || 'gpt-5';
       const messages = [];
       if (system) messages.push({ role: 'system', content: system });
       if (context) messages.push({ role: 'system', content: `Contexto:\n${context}` });
