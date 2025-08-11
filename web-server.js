@@ -266,6 +266,10 @@ async function openaiAsk({ prompt, system, temperature = 0.7, maxTokens = 2000, 
     throw new Error('Temperature debe ser un número entre 0 y 2');
   }
 
+  if (!apiKey || apiKey === 'your-openai-api-key-here') {
+    throw new Error('OPENAI_API_KEY no está configurada correctamente. Por favor, configura tu clave API de OpenAI en el archivo .env');
+  }
+
   if (apiKey) {
     try {
       const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com';
@@ -363,8 +367,17 @@ app.post('/api/ask', async (req, res) => {
   try {
     const { question, system, temperature = 0.7, maxTokens = 2000, context } = req.body;
     
-    if (!question) {
-      return res.status(400).json({ error: 'El campo "question" es requerido' });
+    // Validación mejorada
+    if (!question || typeof question !== 'string' || question.trim().length === 0) {
+      return res.status(400).json({ error: 'El campo "question" es requerido y debe ser una cadena no vacía' });
+    }
+
+    if (temperature !== undefined && (typeof temperature !== 'number' || temperature < 0 || temperature > 2)) {
+      return res.status(400).json({ error: 'Temperature debe ser un número entre 0 y 2' });
+    }
+
+    if (maxTokens !== undefined && (typeof maxTokens !== 'number' || maxTokens < 1 || maxTokens > 100000)) {
+      return res.status(400).json({ error: 'MaxTokens debe ser un número entre 1 y 100000' });
     }
 
     const result = await openaiAsk({
@@ -393,8 +406,14 @@ app.post('/api/analyze', async (req, res) => {
   try {
     const { code, language = 'typescript', task = 'analyze' } = req.body;
     
-    if (!code) {
-      return res.status(400).json({ error: 'El campo "code" es requerido' });
+    // Validación mejorada
+    if (!code || typeof code !== 'string' || code.trim().length === 0) {
+      return res.status(400).json({ error: 'El campo "code" es requerido y debe ser una cadena no vacía' });
+    }
+
+    const validTasks = ['analyze', 'fix', 'optimize', 'explain'];
+    if (task && !validTasks.includes(task)) {
+      return res.status(400).json({ error: `Task debe ser uno de: ${validTasks.join(', ')}` });
     }
 
     const systemPrompt = `Eres un experto en ${language} que analiza código y proporciona sugerencias específicas y prácticas.\n\nTarea: ${task}\n\nINSTRUCCIONES:\n- Proporciona análisis detallado y específico\n- Sugiere mejoras concretas con ejemplos de código\n- Identifica patrones, problemas potenciales y optimizaciones\n- Sé conciso pero completo\n- Formatea la respuesta en Markdown`;
