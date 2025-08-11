@@ -1,13 +1,9 @@
 {
   "mcpServers": {
-    "autonomous-agent": {
+    "mcpagents-autonomous": {
       "command": "node",
       "args": ["dist/mcp/stdio-server.js"],
-      "cwd": "/home/stev/Documentos/repos/Utilidades/MCPagents",
-      "env": {
-        "OPENAI_API_KEY": "your-openai-api-key-here",
-        "OPENAI_MODEL": "gpt-4o-mini"
-      }
+      "cwd": "/home/stev/Documentos/repos/Utilidades/MCPagents"
     }
   }
 }
