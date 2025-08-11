@@ -57,7 +57,7 @@ interface ModelParams {
   description: string;
 }
 
-class MCPAutonomousServer {
+export class MCPAutonomousServer {
   private server: Server;
 
   constructor() {
@@ -584,6 +584,209 @@ class MCPAutonomousServer {
     });
   }
 
+  // Public method for web server integration
+  async listTools() {
+    return {
+      tools: [
+        {
+          name: 'autonomous_ask',
+          description: 'Ask a question to the autonomous copilot with OpenAI integration and automatic project context',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              question: { type: 'string', description: 'The question to ask' },
+              system: { type: 'string', description: 'System prompt to guide the response' },
+              temperature: { type: 'number', description: 'Temperature for response creativity (0-2)', minimum: 0, maximum: 2, default: 0.7 },
+              maxTokens: { type: 'number', description: 'Maximum tokens in response', default: 2000 },
+              context: { type: 'string', description: 'Additional context for the question' },
+              includeProjectContext: { type: 'boolean', description: 'Include automatic project context', default: true },
+            },
+            required: ['question'],
+          },
+        },
+        {
+          name: 'analyze_code',
+          description: 'Analyze code with the autonomous copilot and automatic project context',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              code: { type: 'string', description: 'The code to analyze' },
+              language: { type: 'string', description: 'Programming language of the code', default: 'typescript' },
+              task: { type: 'string', description: 'Type of analysis to perform', enum: ['analyze', 'fix', 'optimize', 'explain'], default: 'analyze' },
+              includeProjectContext: { type: 'boolean', description: 'Include automatic project context', default: true },
+            },
+            required: ['code'],
+          },
+        },
+        {
+          name: 'get_project_context',
+          description: 'Get comprehensive project context including structure, git status, and main files',
+          inputSchema: { type: 'object', properties: {} },
+        },
+        {
+          name: 'health_check',
+          description: 'Check the health status of the autonomous copilot',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+    };
+  }
+
+  // Public method for handling tool calls from web server
+  async handleToolCall(name: string, args: any) {
+    try {
+      switch (name) {
+        case 'autonomous_ask': {
+          const {
+            question,
+            system,
+            temperature = 0.7,
+            maxTokens = 2000,
+            context,
+            includeProjectContext = true,
+          } = args;
+
+          // Validate required parameters first
+          if (!question || typeof question !== 'string' || question.trim().length === 0) {
+            throw new Error('Question is required and must be a non-empty string');
+          }
+
+          // Validate optional parameters
+          if (temperature !== undefined && (typeof temperature !== 'number' || temperature < 0 || temperature > 2)) {
+            throw new Error('Temperature must be a number between 0 and 2');
+          }
+
+          if (maxTokens !== undefined && (typeof maxTokens !== 'number' || maxTokens < 1 || maxTokens > 100000)) {
+            throw new Error('MaxTokens must be a number between 1 and 100000');
+          }
+
+          let finalContext = context || '';
+
+          if (includeProjectContext) {
+            const projectContext = await this.getProjectContext();
+            finalContext = `PROJECT CONTEXT:\n${JSON.stringify(projectContext, null, 2)}\n\nADDITIONAL CONTEXT:\n${context || 'No additional context provided.'}\n\n---`;
+          }
+
+          const result = await this.openaiAsk({
+            prompt: question,
+            system: system || 'You are the Autonomous Copilot, an advanced AI assistant specialized in programming and development. You have access to the complete context of the current project. Respond in a friendly and professional manner.',
+            temperature,
+            maxTokens,
+            context: finalContext,
+          });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: result.answer || 'Could not get response',
+              },
+            ],
+          };
+        }
+
+        case 'analyze_code': {
+          const {
+            code,
+            language = 'typescript',
+            task = 'analyze',
+            includeProjectContext = true,
+          } = args;
+
+          // Validate required parameters first
+          if (!code || typeof code !== 'string' || code.trim().length === 0) {
+            throw new Error('Code is required and must be a non-empty string');
+          }
+
+          // Validate optional parameters
+          const validTasks = ['analyze', 'fix', 'optimize', 'explain'];
+          if (task && !validTasks.includes(task)) {
+            throw new Error(`Task must be one of: ${validTasks.join(', ')}`);
+          }
+
+          let projectContextText = '';
+          if (includeProjectContext) {
+            const projectContext = await this.getProjectContext();
+            projectContextText = `\n\nPROJECT CONTEXT:\n${JSON.stringify(projectContext, null, 2)}`;
+          }
+
+          const systemPrompt = `You are an expert in ${language} who analyzes code and provides specific and practical suggestions. You have access to the complete context of the current project.\n\nTask: ${task}\n\nINSTRUCTIONS:\n- Provide detailed and specific analysis\n- Suggest concrete improvements with code examples\n- Identify patterns, potential problems and optimizations\n- Consider the project context for your recommendations\n- Be concise but complete\n- Format the response in Markdown${projectContextText}`;
+
+          const prompt = `Analyze this ${language} code and ${
+            task === 'fix'
+              ? 'find errors and suggest corrections'
+              : task === 'optimize'
+              ? 'suggest optimizations'
+              : task === 'explain'
+              ? 'explain how it works'
+              : 'provide improvement suggestions'
+          }:\n\n\`\`\`${language}\n${code}\n\`\`\``;
+
+          const result = await this.openaiAsk({
+            prompt,
+            system: systemPrompt,
+            temperature: 0.2,
+            maxTokens: 3000,
+          });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: result.answer || 'Could not analyze the code',
+              },
+            ],
+          };
+        }
+
+        case 'get_project_context': {
+          const projectContext = await this.getProjectContext();
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(projectContext, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'health_check': {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    status: 'ok',
+                    timestamp: new Date().toISOString(),
+                    server: 'mcp-autonomous-server',
+                    version: '2.0.0',
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        default:
+          throw new Error(`Unknown tool: ${name}`);
+      }
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+
   async run(): Promise<void> {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
@@ -591,5 +794,5 @@ class MCPAutonomousServer {
   }
 }
 
-const server = new MCPAutonomousServer();
-server.run().catch(console.error);
+// This class can be imported and used by other modules
+// For stdio server functionality, use stdio-server.ts
