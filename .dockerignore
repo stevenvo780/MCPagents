@@ -15,9 +15,9 @@ README.md
 *.md
 .DS_Store
 .vscode/
-src/
-*.ts
-tsconfig.json
 .env
 .env.*
 .env.example
+dist/
+.claude/
+.qodo/
