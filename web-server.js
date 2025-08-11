@@ -130,20 +130,18 @@ async function getProjectContext() {
 function getModelParams(modelName, temperature, maxTokens) {
   const model = modelName.toLowerCase();
   
-  // GPT-5 (Reasoning model - Flagship)
+  // GPT-5 (Reasoning Model) - Requiere tokens mínimos altos para respuestas visibles
   if (model.includes('gpt-5')) {
     return {
       tokenParam: 'max_completion_tokens',
-      tokenValue: Math.max(1000, Math.min(maxTokens, 8000)),
-      supportsTemperature: false,
+      tokenValue: Math.max(Math.min(maxTokens, 8000), 2000), // Mínimo 2000 para GPT-5
+      supportsTemperature: false, // GPT-5 no soporta temperature
       maxLimit: 8000,
-      minTokens: 1000,
+      minTokens: 2000, // GPT-5 necesita mínimo 2000 tokens para respuestas consistentes
       family: 'gpt-5',
       description: 'GPT-5 Reasoning Model'
     };
-  }
-  
-  // O1-Preview (Advanced Reasoning)
+  }  // O1-Preview (Advanced Reasoning)
   if (model.includes('o1-preview')) {
     return {
       tokenParam: 'max_completion_tokens',
@@ -656,6 +654,9 @@ ${context || 'No hay contexto adicional proporcionado.'}
 ---`;
             }
             
+            console.log(`🔍 DEBUG: Llamando OpenAI con pregunta: "${question}"`);
+            console.log(`📊 DEBUG: maxTokens=${maxTokens}, temperature=${temperature}`);
+            
             const openaiResult = await openaiAsk({
               prompt: question,
               system: system || 'Eres el Autonomous Copilot, un asistente de IA avanzado especializado en programación y desarrollo. Tienes acceso al contexto completo del proyecto actual. Responde en español de manera amigable y profesional.',
@@ -663,6 +664,13 @@ ${context || 'No hay contexto adicional proporcionado.'}
               maxTokens,
               context: finalContext,
             });
+            
+            console.log(`✅ DEBUG: Respuesta de OpenAI:`, {
+              answer: openaiResult.answer?.substring(0, 100) + '...',
+              model: openaiResult.model,
+              usage: openaiResult.usage
+            });
+            
             result = {
               content: [{ 
                 type: 'text', 
