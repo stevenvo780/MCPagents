@@ -20,11 +20,30 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // MCP JSON-RPC endpoint for remote MCP clients
+app.head('/jsonrpc', (_req, res): void => {
+  res.status(405).json({
+    jsonrpc: '2.0',
+    error: { code: -32600, message: 'Method Not Allowed. Use POST /jsonrpc' },
+    id: null
+  });
+});
+
+app.get('/jsonrpc', (_req, res): void => {
+  // Some callers (incl. GCP test tools) probe with GET; respond with 405 instead of 404
+  res.status(405).json({
+    jsonrpc: '2.0',
+    error: { code: -32600, message: 'Method Not Allowed. Use POST /jsonrpc' },
+    id: null
+  });
+});
+
 app.post('/jsonrpc', async (req, res): Promise<void> => {
   try {
     const { method, params, id, jsonrpc } = req.body;
     
-    console.log(`[MCP] Received method: ${method}`, params ? `with params: ${JSON.stringify(params)}` : 'without params');
+    // Truncate params for logging to avoid huge logs
+    const truncatedParams = params ? JSON.stringify(params).substring(0, 500) + (JSON.stringify(params).length > 500 ? '...' : '') : 'no params';
+    console.log(`[MCP] Received method: ${method} with ${truncatedParams}`);
     
     // Validate JSON-RPC format
     if (jsonrpc !== '2.0' || !method) {
@@ -160,6 +179,81 @@ app.get('/test', (_req, res) => {
       hasOpenAI: process.env.OPENAI_API_KEY ? 'configured' : 'not configured'
     }
   });
+});
+
+// New: list supported models (as documented in README)
+app.get('/api/models', (_req, res) => {
+  res.json({
+    models: [
+      'gpt-5',
+      'o1-preview',
+      'o1-mini',
+      'gpt-4o',
+      'gpt-4o-mini',
+      'gpt-4-turbo',
+      'gpt-4',
+      'gpt-3.5-turbo'
+    ],
+    current: process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  });
+});
+
+// New: ask endpoint bridging to MCP tool
+app.post('/api/ask', async (req, res) => {
+  try {
+    const { question, system, temperature, maxTokens, context, includeProjectContext } = req.body || {};
+    if (!question || typeof question !== 'string' || question.trim().length === 0) {
+      res.status(400).json({ error: 'Invalid question' });
+      return;
+    }
+
+    const result = await mcpServer.handleToolCall('autonomous_ask', {
+      question,
+      system,
+      temperature,
+      maxTokens,
+      context,
+      includeProjectContext
+    });
+
+    if ((result as any).isError) {
+      res.status(500).json(result);
+      return;
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('/api/ask error:', error);
+    res.status(500).json({ error: 'Internal error', details: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+// New: analyze endpoint bridging to MCP tool
+app.post('/api/analyze', async (req, res) => {
+  try {
+    const { code, language, task, includeProjectContext } = req.body || {};
+    if (!code || typeof code !== 'string' || code.trim().length === 0) {
+      res.status(400).json({ error: 'Invalid code' });
+      return;
+    }
+
+    const result = await mcpServer.handleToolCall('analyze_code', {
+      code,
+      language,
+      task,
+      includeProjectContext
+    });
+
+    if ((result as any).isError) {
+      res.status(500).json(result);
+      return;
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('/api/analyze error:', error);
+    res.status(500).json({ error: 'Internal error', details: error instanceof Error ? error.message : String(error) });
+  }
 });
 
 // Error handling middleware

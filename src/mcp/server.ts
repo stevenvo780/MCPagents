@@ -175,9 +175,38 @@ export class MCPAutonomousServer {
       throw new Error('OPENAI_API_KEY not configured properly');
     }
 
-    // Validate parameters
+    // Validate and clamp parameters
     if (typeof temperature !== 'number' || temperature < 0 || temperature > 2) {
-      throw new Error('Temperature must be a number between 0 and 2');
+      temperature = Math.max(0, Math.min(2, temperature || 0.7));
+    }
+
+    if (typeof maxTokens !== 'number' || maxTokens < 1 || maxTokens > 100000) {
+      maxTokens = Math.max(1, Math.min(100000, maxTokens || 2000));
+    }
+
+    // Estimate and truncate inputs if too large (rough heuristic: 1 token ≈ 4 chars)
+    const estimatedPromptTokens = prompt.length / 4;
+    const estimatedContextTokens = context ? context.length / 4 : 0;
+    const estimatedSystemTokens = system ? system.length / 4 : 0;
+    const totalEstimatedTokens = estimatedPromptTokens + estimatedContextTokens + estimatedSystemTokens;
+
+    // Conservative limit to avoid rate limits (leaving room for output tokens)
+    const maxInputTokens = 25000;
+    
+    if (totalEstimatedTokens > maxInputTokens) {
+      const reduction = maxInputTokens / totalEstimatedTokens;
+      
+      // Truncate longest input first (usually prompt)
+      if (estimatedPromptTokens > estimatedContextTokens && estimatedPromptTokens > estimatedSystemTokens) {
+        const targetLength = Math.floor(prompt.length * reduction * 0.8);
+        prompt = prompt.substring(0, targetLength) + '...[truncated]';
+      } else if (estimatedContextTokens > estimatedSystemTokens) {
+        const targetLength = Math.floor((context?.length || 0) * reduction * 0.8);
+        context = context?.substring(0, targetLength) + '...[truncated]';
+      }
+      
+      // Reduce maxTokens to leave room
+      maxTokens = Math.min(maxTokens, 3000);
     }
 
     const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com';
@@ -211,6 +240,19 @@ export class MCPAutonomousServer {
     
     if (!response.ok) {
       const errorText = await response.text();
+      
+      // Handle rate limits with user-friendly message
+      if (response.status === 429) {
+        const errorData = JSON.parse(errorText);
+        const message = errorData?.error?.message || 'Rate limit exceeded';
+        
+        if (message.includes('Request too large')) {
+          throw new Error('Input too large. Please reduce the size of your prompt or disable project context.');
+        } else if (message.includes('rate_limit_exceeded')) {
+          throw new Error('Rate limit exceeded. Please try again in a few moments.');
+        }
+      }
+      
       throw new Error(`OpenAI API error: ${response.status} ${response.statusText} - ${errorText}`);
     }
     
@@ -306,11 +348,27 @@ export class MCPAutonomousServer {
         this.getMainProjectFiles(),
       ]);
       
+      // Limit project context size to avoid token overflow
+      const limitedStructure = structure.slice(0, 15);
+      const limitedMainFiles: Record<string, string> = {};
+      
+      // Keep only essential files and truncate them
+      const essentialFiles = ['package.json', 'README.md', 'tsconfig.json'];
+      for (const [file, content] of Object.entries(mainFiles)) {
+        if (essentialFiles.includes(file)) {
+          limitedMainFiles[file] = content.length > 1000 ? content.substring(0, 1000) + '...' : content;
+        }
+      }
+      
       return {
         timestamp: new Date().toISOString(),
-        projectStructure: structure,
-        git: gitInfo,
-        mainFiles: mainFiles,
+        projectStructure: limitedStructure,
+        git: {
+          currentBranch: gitInfo.currentBranch,
+          uncommittedChanges: gitInfo.uncommittedChanges.slice(0, 10),
+          recentCommits: gitInfo.recentCommits.slice(0, 3),
+        },
+        mainFiles: limitedMainFiles,
         summary: `Project on branch ${gitInfo.currentBranch} with ${gitInfo.uncommittedChanges.length} uncommitted changes`,
       };
     } catch (error) {
@@ -421,7 +479,7 @@ export class MCPAutonomousServer {
       try {
         switch (name) {
           case 'autonomous_ask': {
-            const {
+            let {
               question,
               system,
               temperature = 0.7,
@@ -442,20 +500,28 @@ export class MCPAutonomousServer {
               throw new Error('Question is required and must be a non-empty string');
             }
 
-            // Validate optional parameters
+            // Sanitize and clamp input sizes
+            if (question.length > 200000) {
+              question = question.substring(0, 200000) + '...[truncated]';
+            }
+
+            // Don't throw on invalid params, normalize them instead
             if (temperature !== undefined && (typeof temperature !== 'number' || temperature < 0 || temperature > 2)) {
-              throw new Error('Temperature must be a number between 0 and 2');
+              temperature = Math.max(0, Math.min(2, 0.7)); // default to 0.7
             }
 
             if (maxTokens !== undefined && (typeof maxTokens !== 'number' || maxTokens < 1 || maxTokens > 100000)) {
-              throw new Error('MaxTokens must be a number between 1 and 100000');
+              maxTokens = Math.max(1, Math.min(100000, 2000)); // default to 2000
             }
 
             let finalContext = context || '';
 
             if (includeProjectContext) {
               const projectContext = await this.getProjectContext();
-              finalContext = `PROJECT CONTEXT:\n${JSON.stringify(projectContext, null, 2)}\n\nADDITIONAL CONTEXT:\n${context || 'No additional context provided.'}\n\n---`;
+              const contextStr = JSON.stringify(projectContext, null, 2);
+              // Limit context size
+              const limitedContext = contextStr.length > 10000 ? contextStr.substring(0, 10000) + '...[truncated]' : contextStr;
+              finalContext = `PROJECT CONTEXT:\n${limitedContext}\n\nADDITIONAL CONTEXT:\n${context || 'No additional context provided.'}\n\n---`;
             }
 
             const result = await this.openaiAsk({
@@ -477,7 +543,7 @@ export class MCPAutonomousServer {
           }
 
           case 'analyze_code': {
-            const {
+            let {
               code,
               language = 'typescript',
               task = 'analyze',
@@ -494,16 +560,23 @@ export class MCPAutonomousServer {
               throw new Error('Code is required and must be a non-empty string');
             }
 
+            // Truncate large code inputs
+            if (code.length > 100000) {
+              code = code.substring(0, 100000) + '...[truncated]';
+            }
+
             // Validate optional parameters
             const validTasks = ['analyze', 'fix', 'optimize', 'explain'];
             if (task && !validTasks.includes(task)) {
-              throw new Error(`Task must be one of: ${validTasks.join(', ')}`);
+              task = 'analyze'; // default fallback
             }
 
             let projectContextText = '';
             if (includeProjectContext) {
               const projectContext = await this.getProjectContext();
-              projectContextText = `\n\nPROJECT CONTEXT:\n${JSON.stringify(projectContext, null, 2)}`;
+              const contextStr = JSON.stringify(projectContext, null, 2);
+              const limitedContext = contextStr.length > 5000 ? contextStr.substring(0, 5000) + '...[truncated]' : contextStr;
+              projectContextText = `\n\nPROJECT CONTEXT:\n${limitedContext}`;
             }
 
             const systemPrompt = `You are an expert in ${language} who analyzes code and provides specific and practical suggestions. You have access to the complete context of the current project.\n\nTask: ${task}\n\nINSTRUCTIONS:\n- Provide detailed and specific analysis\n- Suggest concrete improvements with code examples\n- Identify patterns, potential problems and optimizations\n- Consider the project context for your recommendations\n- Be concise but complete\n- Format the response in Markdown${projectContextText}`;
@@ -637,7 +710,7 @@ export class MCPAutonomousServer {
     try {
       switch (name) {
         case 'autonomous_ask': {
-          const {
+          let {
             question,
             system,
             temperature = 0.7,
@@ -651,20 +724,28 @@ export class MCPAutonomousServer {
             throw new Error('Question is required and must be a non-empty string');
           }
 
-          // Validate optional parameters
+          // Sanitize and clamp input sizes
+          if (question.length > 200000) {
+            question = question.substring(0, 200000) + '...[truncated]';
+          }
+
+          // Don't throw on invalid params, normalize them instead
           if (temperature !== undefined && (typeof temperature !== 'number' || temperature < 0 || temperature > 2)) {
-            throw new Error('Temperature must be a number between 0 and 2');
+            temperature = Math.max(0, Math.min(2, 0.7)); // default to 0.7
           }
 
           if (maxTokens !== undefined && (typeof maxTokens !== 'number' || maxTokens < 1 || maxTokens > 100000)) {
-            throw new Error('MaxTokens must be a number between 1 and 100000');
+            maxTokens = Math.max(1, Math.min(100000, 2000)); // default to 2000
           }
 
           let finalContext = context || '';
 
           if (includeProjectContext) {
             const projectContext = await this.getProjectContext();
-            finalContext = `PROJECT CONTEXT:\n${JSON.stringify(projectContext, null, 2)}\n\nADDITIONAL CONTEXT:\n${context || 'No additional context provided.'}\n\n---`;
+            const contextStr = JSON.stringify(projectContext, null, 2);
+            // Limit context size
+            const limitedContext = contextStr.length > 10000 ? contextStr.substring(0, 10000) + '...[truncated]' : contextStr;
+            finalContext = `PROJECT CONTEXT:\n${limitedContext}\n\nADDITIONAL CONTEXT:\n${context || 'No additional context provided.'}\n\n---`;
           }
 
           const result = await this.openaiAsk({
@@ -686,7 +767,7 @@ export class MCPAutonomousServer {
         }
 
         case 'analyze_code': {
-          const {
+          let {
             code,
             language = 'typescript',
             task = 'analyze',
@@ -698,16 +779,23 @@ export class MCPAutonomousServer {
             throw new Error('Code is required and must be a non-empty string');
           }
 
+          // Truncate large code inputs
+          if (code.length > 100000) {
+            code = code.substring(0, 100000) + '...[truncated]';
+          }
+
           // Validate optional parameters
           const validTasks = ['analyze', 'fix', 'optimize', 'explain'];
           if (task && !validTasks.includes(task)) {
-            throw new Error(`Task must be one of: ${validTasks.join(', ')}`);
+            task = 'analyze'; // default fallback
           }
 
           let projectContextText = '';
           if (includeProjectContext) {
             const projectContext = await this.getProjectContext();
-            projectContextText = `\n\nPROJECT CONTEXT:\n${JSON.stringify(projectContext, null, 2)}`;
+            const contextStr = JSON.stringify(projectContext, null, 2);
+            const limitedContext = contextStr.length > 5000 ? contextStr.substring(0, 5000) + '...[truncated]' : contextStr;
+            projectContextText = `\n\nPROJECT CONTEXT:\n${limitedContext}`;
           }
 
           const systemPrompt = `You are an expert in ${language} who analyzes code and provides specific and practical suggestions. You have access to the complete context of the current project.\n\nTask: ${task}\n\nINSTRUCTIONS:\n- Provide detailed and specific analysis\n- Suggest concrete improvements with code examples\n- Identify patterns, potential problems and optimizations\n- Consider the project context for your recommendations\n- Be concise but complete\n- Format the response in Markdown${projectContextText}`;
