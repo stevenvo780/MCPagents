@@ -3,7 +3,7 @@
     "mcpagents-autonomous": {
       "command": "node",
       "args": ["dist/mcp/stdio-server.js"],
-      "cwd": "/home/stev/Documentos/repos/Utilidades/MCPagents"
+      "cwd": "/home/stev/Documentos/repos/MCPagents"
     }
   }
 }
