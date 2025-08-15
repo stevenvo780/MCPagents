@@ -76,14 +76,15 @@ export class MCPAutonomousServer {
     this.setupToolHandlers();
   }
 
-  private getModelParams(modelName: string, temperature: number, maxTokens: number): ModelParams {
+  private getModelParams(modelName: string, temperature: number, maxTokens?: number): ModelParams {
     const model = modelName.toLowerCase();
     
     // GPT-5 (Reasoning Model)
     if (model.includes('gpt-5')) {
+      const defaultTokens = 4000; // Optimal for reasoning tasks
       return {
         tokenParam: 'max_completion_tokens',
-        tokenValue: Math.max(Math.min(maxTokens, 8000), 2000),
+        tokenValue: maxTokens ? Math.max(Math.min(maxTokens, 8000), 2000) : defaultTokens,
         supportsTemperature: false,
         maxLimit: 8000,
         minTokens: 2000,
@@ -94,9 +95,10 @@ export class MCPAutonomousServer {
 
     // O1-Preview
     if (model.includes('o1-preview')) {
+      const defaultTokens = 4000; // Good balance for complex reasoning
       return {
         tokenParam: 'max_completion_tokens',
-        tokenValue: Math.max(1000, Math.min(maxTokens, 32768)),
+        tokenValue: maxTokens ? Math.max(1000, Math.min(maxTokens, 32768)) : defaultTokens,
         supportsTemperature: false,
         maxLimit: 32768,
         minTokens: 1000,
@@ -107,9 +109,10 @@ export class MCPAutonomousServer {
     
     // O1-Mini
     if (model.includes('o1-mini')) {
+      const defaultTokens = 2000; // Efficient default for mini
       return {
         tokenParam: 'max_completion_tokens',
-        tokenValue: Math.max(1000, Math.min(maxTokens, 65536)),
+        tokenValue: maxTokens ? Math.max(1000, Math.min(maxTokens, 65536)) : defaultTokens,
         supportsTemperature: false,
         maxLimit: 65536,
         minTokens: 1000,
@@ -120,9 +123,10 @@ export class MCPAutonomousServer {
     
     // GPT-4o-Mini
     if (model.includes('gpt-4o-mini')) {
+      const defaultTokens = 1500; // Economic default
       return {
         tokenParam: 'max_tokens',
-        tokenValue: Math.min(maxTokens, 16384),
+        tokenValue: maxTokens ? Math.min(maxTokens, 16384) : defaultTokens,
         supportsTemperature: true,
         maxLimit: 16384,
         minTokens: 1,
@@ -133,9 +137,10 @@ export class MCPAutonomousServer {
     
     // GPT-4o
     if (model.includes('gpt-4o')) {
+      const defaultTokens = 2000; // Good default for flagship
       return {
         tokenParam: 'max_tokens',
-        tokenValue: Math.min(maxTokens, 16384),
+        tokenValue: maxTokens ? Math.min(maxTokens, 16384) : defaultTokens,
         supportsTemperature: true,
         maxLimit: 16384,
         minTokens: 1,
@@ -145,9 +150,10 @@ export class MCPAutonomousServer {
     }
     
     // Default fallback
+    const defaultTokens = 1000; // Conservative default
     return {
       tokenParam: 'max_tokens',
-      tokenValue: Math.min(maxTokens, 4096),
+      tokenValue: maxTokens ? Math.min(maxTokens, 4096) : defaultTokens,
       supportsTemperature: true,
       maxLimit: 4096,
       minTokens: 1,
@@ -180,8 +186,9 @@ export class MCPAutonomousServer {
       temperature = Math.max(0, Math.min(2, temperature || 0.7));
     }
 
-    if (typeof maxTokens !== 'number' || maxTokens < 1 || maxTokens > 100000) {
-      maxTokens = Math.max(1, Math.min(100000, maxTokens || 2000));
+    // maxTokens is optional - if not provided, model will choose optimal defaults
+    if (maxTokens !== undefined && (typeof maxTokens !== 'number' || maxTokens < 1 || maxTokens > 100000)) {
+      maxTokens = Math.max(1, Math.min(100000, maxTokens));
     }
 
     // Estimate and truncate inputs if too large (rough heuristic: 1 token ≈ 4 chars)
@@ -205,8 +212,10 @@ export class MCPAutonomousServer {
         context = context?.substring(0, targetLength) + '...[truncated]';
       }
       
-      // Reduce maxTokens to leave room
-      maxTokens = Math.min(maxTokens, 3000);
+      // Reduce maxTokens to leave room (if specified)
+      if (maxTokens !== undefined) {
+        maxTokens = Math.min(maxTokens, 3000);
+      }
     }
 
     const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com';
