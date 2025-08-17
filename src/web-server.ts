@@ -19,7 +19,6 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// MCP JSON-RPC endpoint for remote MCP clients
 app.head('/jsonrpc', (_req, res): void => {
   res.status(405).json({
     jsonrpc: '2.0',
