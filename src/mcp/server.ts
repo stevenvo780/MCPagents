@@ -77,6 +77,29 @@ export class MCPAutonomousServer {
     this.setupToolHandlers();
   }
 
+  private getModelTimeout(modelName: string, inputLength: number): number {
+    const model = modelName.toLowerCase();
+    
+    // Base timeout based on model capabilities
+    let baseTimeout = 60000; // 1 minute default
+    
+    if (model.includes('gpt-5') || model.includes('o1-preview') || model.includes('o1-mini')) {
+      // Reasoning models need more time
+      baseTimeout = 120000; // 2 minutes for reasoning models
+    } else if (model.includes('gpt-4o')) {
+      baseTimeout = 90000; // 1.5 minutes for GPT-4o
+    }
+    
+    // Adjust timeout based on input length (longer inputs = more processing time)
+    if (inputLength > 10000) {
+      baseTimeout *= 1.5; // 50% more time for long inputs
+    } else if (inputLength > 5000) {
+      baseTimeout *= 1.25; // 25% more time for medium inputs
+    }
+    
+    return Math.min(baseTimeout, 300000); // Cap at 5 minutes
+  }
+
   private getModelParams(modelName: string, temperature: number, maxTokens?: number): ModelParams {
     const model = modelName.toLowerCase();
     
@@ -240,11 +263,11 @@ export class MCPAutonomousServer {
     }
     
     const timeoutEnv = process.env.OPENAI_TIMEOUT_MS;
-    let timeoutMs = 45000;
+    let timeoutMs = this.getModelTimeout(model, prompt.length + (context?.length || 0));
     if (timeoutEnv) {
       const parsed = parseInt(timeoutEnv, 10);
       if (!Number.isNaN(parsed)) {
-        timeoutMs = Math.max(1000, Math.min(parsed, 120000));
+        timeoutMs = Math.max(1000, Math.min(parsed, 300000)); // Increased max to 5 minutes
       }
     }
 
