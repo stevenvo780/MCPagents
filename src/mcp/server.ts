@@ -8,7 +8,7 @@ import {
   CallToolRequest,
   Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import fetch from 'node-fetch';
+import fetch, { Response } from 'node-fetch';
 import dotenv from 'dotenv';
 import fs from 'fs/promises';
 import path from 'path';
@@ -238,14 +238,37 @@ export class MCPAutonomousServer {
       requestBody.temperature = temperature;
     }
     
-    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-    });
+    const timeoutEnv = process.env.OPENAI_TIMEOUT_MS;
+    let timeoutMs = 45000;
+    if (timeoutEnv) {
+      const parsed = parseInt(timeoutEnv, 10);
+      if (!Number.isNaN(parsed)) {
+        timeoutMs = Math.max(1000, Math.min(parsed, 120000));
+      }
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`OpenAI request timed out after ${timeoutMs}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
     
     if (!response.ok) {
       const errorText = await response.text();
