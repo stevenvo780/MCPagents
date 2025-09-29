@@ -14,6 +14,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { randomUUID } from 'crypto';
 
 const execAsync = promisify(exec);
 
@@ -218,8 +219,8 @@ export class MCPAutonomousServer {
       }
     }
 
-    const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com';
-    const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com';
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
     
     const modelParams = this.getModelParams(model, temperature, maxTokens);
     
@@ -247,6 +248,20 @@ export class MCPAutonomousServer {
       }
     }
 
+    const requestId = randomUUID();
+    const startTime = Date.now();
+    const logPrefix = `[openaiAsk:${requestId}]`;
+    console.log(`${logPrefix} Dispatching request`, {
+      model,
+      temperature: modelParams.supportsTemperature ? temperature : undefined,
+      tokenParam: modelParams.tokenParam,
+      tokenValue: modelParams.tokenValue,
+      promptChars: prompt.length,
+      contextChars: context?.length || 0,
+      timeoutMs,
+      baseUrl,
+    });
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -263,8 +278,10 @@ export class MCPAutonomousServer {
       });
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
+        console.warn(`${logPrefix} Request aborted due to timeout`, { timeoutMs });
         throw new Error(`OpenAI request timed out after ${timeoutMs}ms`);
       }
+      console.error(`${logPrefix} Request failed before receiving response`, { error: error instanceof Error ? error.message : error });
       throw error;
     } finally {
       clearTimeout(timeout);
@@ -272,6 +289,11 @@ export class MCPAutonomousServer {
     
     if (!response.ok) {
       const errorText = await response.text();
+      console.error(`${logPrefix} Received non-OK response`, {
+        status: response.status,
+        statusText: response.statusText,
+        errorPreview: errorText.substring(0, 500),
+      });
       
       // Handle rate limits with user-friendly message
       if (response.status === 429) {
@@ -289,6 +311,12 @@ export class MCPAutonomousServer {
     }
     
     const data = await response.json() as OpenAIResponse;
+    const durationMs = Date.now() - startTime;
+    console.log(`${logPrefix} Completed successfully`, {
+      durationMs,
+      model: data.model || model,
+      usage: data.usage,
+    });
     
     return {
       answer: data.choices?.[0]?.message?.content || '',
