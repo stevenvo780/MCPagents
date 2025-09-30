@@ -32,6 +32,7 @@ interface OpenAIRequest {
   temperature?: number;
   max_tokens?: number;
   max_completion_tokens?: number;
+  stream?: boolean;
 }
 
 interface OpenAIResponse {
@@ -192,12 +193,14 @@ export class MCPAutonomousServer {
     temperature = 0.7,
     maxTokens = 2000,
     context,
+    onProgress,
   }: {
     prompt: string;
     system?: string;
     temperature?: number;
     maxTokens?: number;
     context?: string;
+    onProgress?: (chunk: string) => void;
   }): Promise<{ answer: string; model: string; usage?: any; modelParams: ModelParams }> {
     const apiKey = process.env.OPENAI_API_KEY;
     
@@ -256,6 +259,7 @@ export class MCPAutonomousServer {
       model,
       messages,
       [modelParams.tokenParam]: modelParams.tokenValue,
+      stream: !!onProgress, // Enable streaming if callback provided
     };
     
     if (modelParams.supportsTemperature) {
@@ -283,7 +287,12 @@ export class MCPAutonomousServer {
       contextChars: context?.length || 0,
       timeoutMs,
       baseUrl,
+      streaming: !!onProgress,
     });
+    
+    if (onProgress) {
+      console.log(`${logPrefix} 🌊 STREAMING MODE ENABLED - Progressive response will be processed`);
+    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -333,6 +342,67 @@ export class MCPAutonomousServer {
       throw new Error(`OpenAI API error: ${response.status} ${response.statusText} - ${errorText}`);
     }
     
+    // Handle streaming response
+    if (requestBody.stream && onProgress) {
+      let fullAnswer = '';
+      let model = '';
+      let usage: any = undefined;
+      
+      if (!response.body) {
+        throw new Error('No response body available for streaming');
+      }
+      
+      const decoder = new TextDecoder();
+      let buffer = '';
+      
+      // Process streaming data
+      for await (const chunk of response.body as any) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+        
+        for (const line of lines) {
+          if (line.trim() && line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+            
+            try {
+              const parsed = JSON.parse(data);
+              const content = parsed.choices?.[0]?.delta?.content;
+              if (content) {
+                fullAnswer += content;
+                onProgress(content);
+              }
+              
+              // Capture model and usage info when available
+              if (parsed.model) model = parsed.model;
+              if (parsed.usage) usage = parsed.usage;
+            } catch (parseError) {
+              // Skip invalid JSON lines
+              continue;
+            }
+          }
+        }
+      }
+      
+      const durationMs = Date.now() - startTime;
+      console.log(`${logPrefix} 🎉 Streaming completed successfully`, {
+        durationMs,
+        model: model || requestBody.model,
+        usage,
+        answerLength: fullAnswer.length,
+        averageCharsPerSecond: Math.round(fullAnswer.length / (durationMs / 1000)),
+      });
+      
+      return {
+        answer: fullAnswer,
+        model: model || requestBody.model,
+        usage,
+        modelParams: modelParams,
+      };
+    }
+    
+    // Handle non-streaming response
     const data = await response.json() as OpenAIResponse;
     const durationMs = Date.now() - startTime;
     console.log(`${logPrefix} Completed successfully`, {
@@ -607,12 +677,40 @@ export class MCPAutonomousServer {
               finalContext = `PROJECT CONTEXT:\n${limitedContext}\n\nADDITIONAL CONTEXT:\n${context || 'No additional context provided.'}\n\n---`;
             }
 
+            // For complex queries, use progressive response strategy
+            const isComplexQuery = question.length > 1000 || (maxTokens && maxTokens > 3000);
+            let progressiveResponse = '';
+            let chunkCount = 0;
+            const startTime = Date.now();
+            
+            const onProgress = isComplexQuery ? (chunk: string) => {
+              progressiveResponse += chunk;
+              chunkCount++;
+              
+              // Enhanced progress indicators
+              if (chunkCount % 25 === 0) {
+                const elapsed = Date.now() - startTime;
+                const wordsEstimate = Math.floor(progressiveResponse.length / 5);
+                console.log(`[autonomous_ask:PROGRESS] 📝 Generating response... | Chunks: ${chunkCount} | Words: ~${wordsEstimate} | Elapsed: ${elapsed}ms`);
+              }
+              
+              // Periodic keepalive for very long responses
+              if (chunkCount % 100 === 0) {
+                console.log(`[autonomous_ask:KEEPALIVE] 🔄 Still processing complex query... Progress: ${Math.floor(progressiveResponse.length / 100)}%`);
+              }
+            } : undefined;
+            
+            if (isComplexQuery) {
+              console.log(`[autonomous_ask:START] 🚀 Starting complex query processing | Question length: ${question.length} chars | Max tokens: ${maxTokens}`);
+            }
+
             const result = await this.openaiAsk({
               prompt: question,
               system: system || 'You are the Autonomous Copilot, an advanced AI assistant specialized in programming and development. You have access to the complete context of the current project. Respond in a friendly and professional manner.',
               temperature,
               maxTokens,
               context: finalContext,
+              onProgress,
             });
 
             return {
@@ -831,12 +929,40 @@ export class MCPAutonomousServer {
             finalContext = `PROJECT CONTEXT:\n${limitedContext}\n\nADDITIONAL CONTEXT:\n${context || 'No additional context provided.'}\n\n---`;
           }
 
+          // For complex queries, use progressive response strategy
+          const isComplexQuery = question.length > 1000 || (maxTokens && maxTokens > 3000);
+          let progressiveResponse = '';
+          let chunkCount = 0;
+          const startTime = Date.now();
+          
+          const onProgress = isComplexQuery ? (chunk: string) => {
+            progressiveResponse += chunk;
+            chunkCount++;
+            
+            // Enhanced progress indicators
+            if (chunkCount % 25 === 0) {
+              const elapsed = Date.now() - startTime;
+              const wordsEstimate = Math.floor(progressiveResponse.length / 5);
+              console.log(`[handleToolCall:autonomous_ask:PROGRESS] 📝 Generating response... | Chunks: ${chunkCount} | Words: ~${wordsEstimate} | Elapsed: ${elapsed}ms`);
+            }
+            
+            // Periodic keepalive for very long responses
+            if (chunkCount % 100 === 0) {
+              console.log(`[handleToolCall:autonomous_ask:KEEPALIVE] 🔄 Still processing complex query... Progress: ${Math.floor(progressiveResponse.length / 100)}%`);
+            }
+          } : undefined;
+          
+          if (isComplexQuery) {
+            console.log(`[handleToolCall:autonomous_ask:START] 🚀 Starting complex query processing | Question length: ${question.length} chars | Max tokens: ${maxTokens}`);
+          }
+
           const result = await this.openaiAsk({
             prompt: question,
             system: system || 'You are the Autonomous Copilot, an advanced AI assistant specialized in programming and development. You have access to the complete context of the current project. Respond in a friendly and professional manner.',
             temperature,
             maxTokens,
             context: finalContext,
+            onProgress,
           });
 
           return {
